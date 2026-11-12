@@ -121,16 +121,21 @@ object PhotoProcessor {
         return Result(saveBitmap(context, out, rotation, quality, location, source.jpeg))
     }
 
-    /** Portrait: keeps the person sharp and blurs the background. */
+    /**
+     * Portrait: keeps the person sharp and blurs the background. With [enhance], the photo is first
+     * finished by [BurstEngine] (tone, colour noise, sharpening), so the subject gets the same look as Photo mode.
+     */
     fun savePortrait(
         context: Context,
         frame: Frame,
         square: Boolean,
         stamp: Boolean,
         quality: Int,
-        location: Location?
+        location: Location?,
+        enhance: BurstEngine.Params? = null
     ): Result {
-        val upright = decodeUpright(frame, 3264) ?: return Result(saveRaw(context, frame, location))
+        var upright = decodeUpright(frame, 3264) ?: return Result(saveRaw(context, frame, location))
+        if (enhance != null) upright = BurstEngine.enhanceBitmap(upright, enhance)
         var note: String? = null
         val blurred = try {
             portrait(upright)

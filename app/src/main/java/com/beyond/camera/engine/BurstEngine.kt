@@ -97,6 +97,26 @@ object BurstEngine {
     }
 
     /**
+     * Finishing only, for a photo that is already decoded (Portrait). Works in place when the bitmap
+     * is mutable; otherwise on a copy. Returns the input unchanged if memory runs out.
+     */
+    fun enhanceBitmap(bitmap: Bitmap, p: Params): Bitmap = try {
+        val target = if (bitmap.isMutable) {
+            bitmap
+        } else {
+            bitmap.copy(Bitmap.Config.ARGB_8888, true)?.also { bitmap.recycle() } ?: bitmap
+        }
+        if (target.isMutable) {
+            val sigma = estimateNoise(target)
+            if (p.gain != 1f) applyGain(target, p.gain)
+            finish(target, p, sigma)
+        }
+        target
+    } catch (e: OutOfMemoryError) {
+        bitmap
+    }
+
+    /**
      * Aligns and merges a burst, then finishes it. For [Kind.HDR] the first frame must be the normal
      * exposure. Returns the result in sensor orientation, or null if merging wasn't possible.
      */
