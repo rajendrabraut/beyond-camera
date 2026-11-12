@@ -313,7 +313,6 @@ fun CameraScreen(
         val stamp = settings.timestamp
         val quality = settings.pictureQuality.jpeg
         val location = if (settings.saveLocation) LocationHelper.lastKnown(app) else null
-        val fuseZoom = m == CameraMode.PHOTO && settings.enhancedZoom && engine.zoomRatio >= 1.95f
         busy = ""
         try {
             if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
@@ -349,20 +348,6 @@ fun CameraScreen(
                         PhotoProcessor.saveFusion(
                             app, frames,
                             Fusion.Options(Fusion.Kind.HDR, contrast = 0.25f, saturation = 1.1f),
-                            square, stamp, quality, location
-                        )
-                    }
-                }
-
-                fuseZoom -> {
-                    busy = "Hold still…"
-                    engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    val frames = engine.burst(3, 0f)
-                    busy = "Enhancing…"
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.saveFusion(
-                            app, frames,
-                            Fusion.Options(Fusion.Kind.DENOISE, sharpen = 0.6f),
                             square, stamp, quality, location
                         )
                     }

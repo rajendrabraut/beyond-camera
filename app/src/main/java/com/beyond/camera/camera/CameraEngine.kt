@@ -164,8 +164,13 @@ class CameraEngine(private val context: Context) {
 
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
+                    val captureMode = if (cfg.mode == CameraMode.PHOTO && !cfg.hdr) {
+                        ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
+                    } else {
+                        ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                    }
                     val capture = ImageCapture.Builder()
-                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setCaptureMode(captureMode)
                         .setJpegQuality(cfg.jpegQuality)
                         .setResolutionSelector(
                             ResolutionSelector.Builder()
