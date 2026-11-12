@@ -47,121 +47,29 @@ object PhotoProcessor {
         ExifInterface.TAG_WHITE_BALANCE
     )
 
-    class Result(val uri: Uri?, val note: String? = null)
-
-    /** ISO the camera used for this frame (from its EXIF), or 0 if unknown. */
-    fun isoOf(frame: Frame): Int = runCatching {
-        ExifInterface(ByteArrayInputStream(frame.jpeg)).getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0)
-    }.getOrDefault(0)
-
-    /**
-     * A single shot. With [enhance] it is finished by [BurstEngine]; without it the sensor JPEG is kept
-     * untouched unless a square crop or time stamp is requested.
-     */
-    fun saveSingle(
-        context: Context,
-        frame: Frame,
-        square: Boolean,
-        stamp: Boolean,
-        quality: Int,
-        location: Location?,
-        enhance: BurstEngine.Params? = null
-    ): Result {
-        if (enhance != null) {
-            val finished = BurstEngine.enhanceSingle(frame.jpeg, enhance)
-            if (finished != null) return saveProcessed(context, finished, frame, square, stamp, quality, location)
-        }
-        if (square || stamp) {
-            val upright = decodeUpright(frame, Int.MAX_VALUE)
-            if (upright != null) {
-                val finished = decorate(upright, square, stamp)
-                return Result(saveBitmap(context, finished, 0, quality, location, frame.jpeg))
-            }
-        }
-        return Result(saveRaw(context, frame, location))
+    data class Edit(
+        val quality: Int,
+        val enhance: BurstEngine.Params?,
+        val portrait: Boolean,
+        val square: Boolean,
+        val stampAt: Long?
+    ) {
+        val needed: Boolean get() = enhance != null || portrait || square || stampAt != null
     }
 
-    /** Several frames aligned and merged by [BurstEngine]. Falls back to the first frame if merging fails. */
-    fun saveBurst(
-        context: Context,
-        frames: List<Frame>,
-        params: BurstEngine.Params,
-        square: Boolean,
-        stamp: Boolean,
-        quality: Int,
-        location: Location?
-    ): Result {
-        val first = frames.firstOrNull() ?: return Result(null)
-        val merged: Bitmap? = BurstEngine.process(frames.map { it.jpeg }, params)
-        if (merged == null) {
-            val plain = saveSingle(context, first, square, stamp, quality, location)
-            return Result(plain.uri, if (frames.size > 1) "Saved without enhancement (not enough memory)" else null)
-        }
-        return saveProcessed(context, merged, first, square, stamp, quality, location)
-    }
-
-    private fun saveProcessed(
-        context: Context,
-        bitmap: Bitmap,
-        source: Frame,
-        square: Boolean,
-        stamp: Boolean,
-        quality: Int,
-        location: Location?
-    ): Result {
-        var out = bitmap
-        var rotation = source.rotation
-        if (square || stamp) {
-            val upright = rotate(out, rotation)
-            if (upright != null) {
-                out = decorate(upright, square, stamp)
-                rotation = 0
-            }
-        }
-        return Result(saveBitmap(context, out, rotation, quality, location, source.jpeg))
-    }
-
-    /**
-     * Portrait: keeps the person sharp and blurs the background. With [enhance], the photo is first
-     * finished by [BurstEngine] (tone, colour noise, sharpening), so the subject gets the same look as Photo mode.
-     */
-    fun savePortrait(
-        context: Context,
-        frame: Frame,
-        square: Boolean,
-        stamp: Boolean,
-        quality: Int,
-        location: Location?,
-        enhance: BurstEngine.Params? = null
-    ): Result {
-        var upright = decodeUpright(frame, 3264) ?: return Result(saveRaw(context, frame, location))
-        if (enhance != null) upright = BurstEngine.enhanceBitmap(upright, enhance)
-        var note: String? = null
-        val blurred = try {
-            portrait(upright)
-        } catch (e: Throwable) {
-            null
-        }
-        val base = if (blurred != null) {
-            upright.recycle()
-            blurred
-        } else {
-            note = "No person found: saved without blur"
-            upright
-        }
-        val finished = decorate(base, square, stamp)
-        return Result(saveBitmap(context, finished, 0, quality, location, frame.jpeg), note)
-    }
-
-    private fun saveRaw(context: Context, frame: Frame, location: Location?): Uri? {
+    fun saveOriginal(context: Context, frame: Frame, location: Location?): Uri? {
         val file = MediaStoreSaver.tempFile(context, "jpg")
         return try {
             file.writeBytes(frame.jpeg)
-            if (location != null) {
+            if (location != null || frame.rotation != 0) {
                 runCatching {
                     val exif = ExifInterface(file)
-                    exif.setGpsInfo(location)
-                    exif.saveAttributes()
+                    val needsOrientation = exif.getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED
+                    ) == ExifInterface.ORIENTATION_UNDEFINED && frame.rotation != 0
+                    if (needsOrientation) exif.rotate(frame.rotation)
+                    if (location != null) exif.setGpsInfo(location)
+                    if (needsOrientation || location != null) exif.saveAttributes()
                 }
             }
             MediaStoreSaver.publish(context, file, false, "image/jpeg")
@@ -171,34 +79,55 @@ object PhotoProcessor {
         }
     }
 
-    private fun saveBitmap(
+    /** Renders a complete JPEG in cache before replacing the published original. */
+    fun finish(
         context: Context,
-        bitmap: Bitmap,
+        uri: Uri,
         rotation: Int,
-        quality: Int,
+        edit: Edit,
         location: Location?,
-        exifSource: ByteArray?
-    ): Uri? {
-        val file = MediaStoreSaver.tempFile(context, "jpg")
-        return try {
-            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, quality, it) }
+        extraFrames: List<File>
+    ): Boolean {
+        val source = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return false
+        val upright = edit.portrait || edit.square || edit.stampAt != null
+        var bitmap = when {
+            edit.portrait -> decodeUpright(Frame(source, rotation), 3264)
+            extraFrames.isNotEmpty() && edit.enhance != null ->
+                BurstEngine.process(listOf(source) + extraFrames.map { it.readBytes() }, edit.enhance)
+            edit.enhance != null -> BurstEngine.enhanceSingle(source, edit.enhance)
+            else -> decodeUpright(Frame(source, rotation), Int.MAX_VALUE)
+        } ?: return false
+
+        val output = MediaStoreSaver.tempFile(context, "jpg")
+        try {
+            if (edit.portrait) {
+                edit.enhance?.let { bitmap = BurstEngine.enhanceBitmap(bitmap, it) }
+                val blurred = portrait(bitmap)
+                if (blurred != null) {
+                    bitmap.recycle()
+                    bitmap = blurred
+                } else if (edit.enhance == null && !edit.square && edit.stampAt == null) {
+                    return false
+                }
+            } else if (upright && edit.enhance != null) {
+                bitmap = rotate(bitmap, rotation) ?: return false
+            }
+            bitmap = decorate(bitmap, edit.square, edit.stampAt)
+            if (!FileOutputStream(output).use { bitmap.compress(Bitmap.CompressFormat.JPEG, edit.quality, it) }) {
+                return false
+            }
+            writeExif(output, source, if (upright) 0 else rotation, location)
+            return MediaStoreSaver.replacePhoto(context, uri, output, source)
+        } finally {
             bitmap.recycle()
-            runCatching { writeExif(file, exifSource, rotation, location) }
-            MediaStoreSaver.publish(context, file, false, "image/jpeg")
-        } catch (e: Exception) {
-            file.delete()
-            null
+            output.delete()
         }
     }
 
-    private fun writeExif(file: File, source: ByteArray?, rotation: Int, location: Location?) {
+    private fun writeExif(file: File, source: ByteArray, rotation: Int, location: Location?) {
         val dst = ExifInterface(file)
-        if (source != null) {
-            runCatching {
-                val src = ExifInterface(ByteArrayInputStream(source))
-                for (tag in COPIED_TAGS) src.getAttribute(tag)?.let { dst.setAttribute(tag, it) }
-            }
-        }
+        val src = ExifInterface(ByteArrayInputStream(source))
+        for (tag in COPIED_TAGS) src.getAttribute(tag)?.let { dst.setAttribute(tag, it) }
         val orientation = when (rotation) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
             180 -> ExifInterface.ORIENTATION_ROTATE_180
@@ -235,7 +164,10 @@ object PhotoProcessor {
                 if (scaled != bitmap) bitmap.recycle()
                 bitmap = scaled
             }
-            rotate(bitmap, frame.rotation) ?: bitmap
+            rotate(bitmap, frame.rotation) ?: run {
+                bitmap.recycle()
+                null
+            }
         } else {
             null
         }
@@ -258,7 +190,7 @@ object PhotoProcessor {
         }
     }
 
-    private fun decorate(input: Bitmap, square: Boolean, stamp: Boolean): Bitmap {
+    private fun decorate(input: Bitmap, square: Boolean, stampAt: Long?): Bitmap {
         var bitmap = input
         try {
             if (square && bitmap.width != bitmap.height) {
@@ -273,16 +205,15 @@ object PhotoProcessor {
                 if (cropped != bitmap) bitmap.recycle()
                 bitmap = cropped
             }
-            if (stamp) {
+            if (stampAt != null) {
                 if (!bitmap.isMutable) {
                     val copy = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-                    if (copy != null) {
-                        bitmap.recycle()
-                        bitmap = copy
-                    }
+                    if (copy == null) throw IllegalStateException("Could not copy bitmap for timestamp")
+                    bitmap.recycle()
+                    bitmap = copy
                 }
                 if (bitmap.isMutable) {
-                    val text = SimpleDateFormat("yyyy-MM-dd  HH:mm", Locale.getDefault()).format(Date())
+                    val text = SimpleDateFormat("yyyy-MM-dd  HH:mm", Locale.getDefault()).format(Date(stampAt))
                     val size = max(bitmap.width, bitmap.height) / 40f
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                         color = Color.WHITE
@@ -294,8 +225,9 @@ object PhotoProcessor {
                     Canvas(bitmap).drawText(text, bitmap.width - size * 1.2f, bitmap.height - size * 1.2f, paint)
                 }
             }
-        } catch (e: OutOfMemoryError) {
-            // Keep whatever we have.
+        } catch (e: Throwable) {
+            if (bitmap != input) bitmap.recycle()
+            throw e
         }
         return bitmap
     }

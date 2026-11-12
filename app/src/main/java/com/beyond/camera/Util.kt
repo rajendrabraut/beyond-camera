@@ -20,8 +20,8 @@ import kotlin.coroutines.resumeWithException
 
 /** App palette. */
 object Ui {
-    val Accent = Color(0xFF8B7CFF)
-    val AccentSoft = Color(0xFFC9C2FF)
+    val Accent = Color(0xFF14B8A6)
+    val AccentSoft = Color(0xFF99F6E4)
     val Record = Color(0xFFFF4D5E)
     val Panel = Color(0xE61A1A22)
     val Chip = Color(0x66000000)

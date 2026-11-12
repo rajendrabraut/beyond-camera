@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.beyond.camera.engine.ProcessingQueue
 import coil.size.Size
 import com.beyond.camera.MediaItem
 import com.beyond.camera.MediaStoreSaver
@@ -233,9 +234,11 @@ private fun PhotoPage(item: MediaItem, active: Boolean, onTap: () -> Unit) {
         return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
     }
 
-    val request = remember(item.uri, fullRes) {
+    val revision = ProcessingQueue.revision(item.uri)
+    val request = remember(item.uri, fullRes, revision) {
         ImageRequest.Builder(context)
             .data(item.uri)
+            .memoryCacheKey("${item.uri}:viewer:$revision:$fullRes")
             .apply { if (fullRes) size(Size.ORIGINAL).allowHardware(false) }
             .crossfade(false)
             .build()

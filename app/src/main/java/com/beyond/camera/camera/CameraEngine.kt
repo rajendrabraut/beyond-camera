@@ -50,7 +50,6 @@ import com.beyond.camera.MediaStoreSaver
 import com.beyond.camera.await
 import com.beyond.camera.settings.AntiBanding
 import com.beyond.camera.settings.VideoResolution
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
@@ -58,7 +57,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.math.roundToInt
 
 /** Owns the CameraX session: binds the right use cases for each mode and exposes capture controls. */
 @SuppressLint("UnsafeOptInUsageError")
@@ -170,7 +168,7 @@ class CameraEngine(private val context: Context) {
                     // Zero shutter lag only where the camera really supports it (otherwise CameraX would
                     // silently fall back to the lower-quality low-latency mode). Everything else, and every
                     // multi-frame mode, uses maximum quality.
-                    val zsl = cfg.mode == CameraMode.PHOTO && !cfg.hdr && !extensionOn &&
+                    val zsl = cfg.mode == CameraMode.PHOTO && !extensionOn &&
                         runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
                     zeroShutterLag = zsl
                     val captureMode = if (zsl) {
@@ -361,9 +359,10 @@ class CameraEngine(private val context: Context) {
     suspend fun capture(): Frame {
         val capture = imageCapture ?: throw IllegalStateException("Camera not ready")
         return suspendCancellableCoroutine { cont ->
-            capture.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+            capture.takePicture(analysisExecutor, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     try {
+                        if (!cont.isActive) return
                         val buffer = image.planes[0].buffer
                         val bytes = ByteArray(buffer.remaining())
                         buffer.get(bytes)
@@ -380,53 +379,6 @@ class CameraEngine(private val context: Context) {
                 }
             })
         }
-    }
-
-    /** Several frames at the same exposure, optionally brightened, for noise-reducing fusion. */
-    suspend fun burst(count: Int, evBoost: Float): List<Frame> {
-        val cam = camera ?: throw IllegalStateException("Camera not ready")
-        val frames = ArrayList<Frame>()
-        val exposure = cam.cameraInfo.exposureState
-        var changed = false
-        try {
-            if (evBoost > 0f && exposure.isExposureCompensationSupported) {
-                val step = exposure.exposureCompensationStep.toFloat()
-                val index = (evBoost / step).roundToInt().coerceAtMost(exposure.exposureCompensationRange.upper)
-                if (index > 0) {
-                    runCatching { cam.cameraControl.setExposureCompensationIndex(index).await(mainExecutor) }
-                    changed = true
-                    delay(450)
-                }
-            }
-            repeat(count) { frames.add(capture()) }
-        } finally {
-            if (changed) runCatching { cam.cameraControl.setExposureCompensationIndex(0) }
-        }
-        return frames
-    }
-
-    /** Normal, darker and brighter frames for HDR fusion. The normal frame comes first. */
-    suspend fun bracket(): List<Frame> {
-        val cam = camera ?: throw IllegalStateException("Camera not ready")
-        val frames = ArrayList<Frame>()
-        frames.add(capture())
-        val exposure = cam.cameraInfo.exposureState
-        if (!exposure.isExposureCompensationSupported) return frames
-        val step = exposure.exposureCompensationStep.toFloat()
-        val range = exposure.exposureCompensationRange
-        val index = (1.7f / step).roundToInt()
-        try {
-            for (target in intArrayOf(-index, index)) {
-                val value = target.coerceIn(range.lower, range.upper)
-                if (value == 0) continue
-                runCatching { cam.cameraControl.setExposureCompensationIndex(value).await(mainExecutor) }
-                delay(500)
-                frames.add(capture())
-            }
-        } finally {
-            runCatching { cam.cameraControl.setExposureCompensationIndex(0) }
-        }
-        return frames
     }
 
     @SuppressLint("MissingPermission")

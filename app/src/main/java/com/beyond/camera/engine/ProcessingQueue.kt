@@ -1,47 +1,54 @@
 package com.beyond.camera.engine
 
+import android.content.Context
+import android.location.Location
 import android.net.Uri
+import androidx.compose.runtime.mutableStateMapOf
 import com.beyond.camera.camera.PhotoProcessor
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
-/**
- * Finishes photos in the background, one at a time, so the shutter is free again as soon as the
- * frames are captured. Keeps running when the user leaves the camera screen.
- */
+/** Finishes published photos one at a time, even after the user leaves the camera screen. */
 object ProcessingQueue {
-    const val MAX_PENDING = 3
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val mutex = Mutex()
+    private val jobs = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    private val revisions = mutableStateMapOf<String, Int>()
 
-    val pending = MutableStateFlow(0)
-    val saved = MutableSharedFlow<Uri>(extraBufferCapacity = 8)
-    val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
-
-    fun isFull(): Boolean = pending.value >= MAX_PENDING
-
-    fun submit(job: () -> PhotoProcessor.Result) {
-        pending.update { it + 1 }
+    init {
         scope.launch {
-            mutex.withLock {
-                try {
-                    val result = job()
-                    val uri = result.uri
-                    if (uri != null) saved.emit(uri) else messages.emit("Couldn't save the photo")
-                    result.note?.let { messages.emit(it) }
-                } catch (t: Throwable) {
-                    messages.emit("Couldn't process the photo")
-                } finally {
-                    pending.update { it - 1 }
-                }
+            for (job in jobs) job()
+        }
+    }
+
+    // MediaStore can return a volume-specific URI for the same image ID.
+    fun revision(uri: Uri): Int = uri.lastPathSegment?.let { revisions[it] } ?: 0
+
+    fun submit(
+        context: Context,
+        uri: Uri,
+        rotation: Int,
+        edit: PhotoProcessor.Edit,
+        location: Location?,
+        extraFrames: List<File>
+    ) {
+        jobs.trySend {
+            val replaced = try {
+                PhotoProcessor.finish(context, uri, rotation, edit, location, extraFrames)
+            } catch (_: Exception) {
+                false
+            } catch (_: OutOfMemoryError) {
+                false
+            } finally {
+                extraFrames.forEach { it.delete() }
+            }
+            if (replaced) {
+                val id = uri.lastPathSegment ?: return@trySend
+                withContext(Dispatchers.Main) { revisions[id] = revision(uri) + 1 }
             }
         }
     }

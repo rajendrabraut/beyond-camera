@@ -117,9 +117,9 @@ jobs:
           for apk in dist/*.apk; do
             echo "== $apk"
             "$bt/apksigner" verify --print-certs "$apk" | grep "certificate DN"
-            "$bt/aapt2" dump badging "$apk" | grep -E "^package:|uses-permission: name='android.permission.INTERNET'" || true
-            if "$bt/aapt2" dump permissions "$apk" | grep -q "android.permission.INTERNET"; then
-              echo "INTERNET permission found: the app must stay offline"
+            "$bt/aapt2" dump badging "$apk" | grep "^package:" || true
+            if "$bt/aapt2" dump permissions "$apk" | grep -Eq "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE)"; then
+              echo "Network permission found. The app must stay offline."
               exit 1
             fi
           done
