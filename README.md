@@ -94,8 +94,8 @@ If neither file exists, the release build is signed with the debug key, so it st
 
 ## Versioning
 
-Four-part versions: the last part goes up for small updates (`1.1.0.1`, `1.1.0.2`), the second part
-for big ones (`1.1.0.0`, `1.2.0.0`).
+Four-part versions: the last part goes up for small updates (`1.0.0.1`, `1.0.0.2`), the second part
+for big ones (`1.0.0.0`, `1.1.0.0`). Android version codes increase with every release to allow app upgrades.
 
 ## Tech stack
 
