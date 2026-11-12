@@ -41,6 +41,7 @@ methods (no code copied):
 | Night | 5 brightened frames merged, strongest cleanup |
 | HDR | 3 exposures merged |
 | Zoom 2x and above | 4 frames merged, stronger noise-aware sharpening |
+| Portrait (Smart processing on) | Finishing first, then the background blur |
 | Pro, or the phone maker's own HDR / Night / Bokeh | Untouched camera output |
 
 Finishing runs in the background, so you can keep shooting. Everything works in strips, so memory

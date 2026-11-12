@@ -20,6 +20,9 @@ object EngineTuning {
     /** HDR: normal + darker + brighter frames merged in linear light. */
     val hdr = Params(Kind.HDR, shadows = 0.3f, highlights = 0.5f, chroma = 0.5f, sharpen = 0.3f, saturation = 1.08f)
 
+    /** Portrait: finished before the background blur; colour-noise cleanup kept moderate for skin texture. */
+    val portrait = Params(Kind.DENOISE, shadows = 0.25f, highlights = 0.3f, chroma = 0.5f, sharpen = 0.25f, saturation = 1.04f)
+
     /** Zoom at 2x and above: 4 merged frames and stronger (noise-aware) sharpening. */
     val zoom = Params(Kind.DENOISE, shadows = 0.18f, highlights = 0.25f, chroma = 0.6f, sharpen = 0.6f, saturation = 1.04f)
 }

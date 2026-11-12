@@ -368,7 +368,10 @@ fun CameraScreen(
 
                 m == CameraMode.PORTRAIT -> {
                     val frame = engine.capture()
-                    ProcessingQueue.submit { PhotoProcessor.savePortrait(app, frame, square, stamp, quality, location) }
+                    val finish = if (smart) EngineTuning.portrait else null
+                    ProcessingQueue.submit {
+                        PhotoProcessor.savePortrait(app, frame, square, stamp, quality, location, finish)
+                    }
                 }
 
                 smart -> {
