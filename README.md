@@ -27,6 +27,30 @@ On Windows, use `gradlew.bat assembleDebug` instead. The APK is written to `app/
 
 You can also open the folder in Android Studio and press Run.
 
+### Release build
+
+```bash
+./gradlew assembleRelease
+```
+
+The signed APK is written to `app/build/outputs/apk/release/app-release.apk`. Release builds are minified and resource-shrunk with R8.
+
+Signing reads the first of these that exists (neither is committed):
+
+1. `keystore.properties` in the project root
+2. `~/.android/beyond-camera-keystore.properties`
+
+The file needs these keys:
+
+```properties
+storeFile=C:/path/to/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+If neither file exists, the release build is signed with the debug key, so it still installs but can't be published.
+
 ## Tech stack
 
 | Part | Version |

@@ -9,6 +9,7 @@ build/
 *.aab
 *.keystore
 *.jks
+keystore.properties
 
 # Android Studio / IntelliJ
 .idea/
