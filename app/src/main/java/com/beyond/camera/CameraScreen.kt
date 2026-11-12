@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -81,7 +82,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.beyond.camera.camera.BindConfig
 import com.beyond.camera.camera.CameraEngine
 import com.beyond.camera.camera.CameraMode
-import com.beyond.camera.camera.Fusion
+import com.beyond.camera.engine.EngineTuning
+import com.beyond.camera.engine.ProcessingQueue
 import com.beyond.camera.camera.PhotoProcessor
 import com.beyond.camera.camera.ProState
 import com.beyond.camera.camera.TimelapseRecorder
@@ -291,6 +293,13 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         last = withContext(Dispatchers.IO) { MediaStoreSaver.latest(app) }
     }
+    val processing by ProcessingQueue.pending.collectAsState()
+    LaunchedEffect(Unit) {
+        ProcessingQueue.saved.collect { uri -> last = MediaItem(uri, false) }
+    }
+    LaunchedEffect(Unit) {
+        ProcessingQueue.messages.collect { app.toast(it) }
+    }
 
     DisposableEffect(Unit) {
         VolumeKeyEvents.cameraActive = true
@@ -306,36 +315,36 @@ fun CameraScreen(
     }
 
     // ---- Actions -------------------------------------------------------------------------------
+    // Frames are captured here; finishing runs in the background queue so the shutter frees up fast.
     suspend fun capturePhoto() {
         if (busy != null || !engine.photoReady) return
+        if (ProcessingQueue.isFull()) {
+            app.toast("Still finishing earlier photos…")
+            return
+        }
         val m = mode
         val square = settings.aspectRatio == AspectRatioOption.R1_1
         val stamp = settings.timestamp
         val quality = settings.pictureQuality.jpeg
         val location = if (settings.saveLocation) LocationHelper.lastKnown(app) else null
+        val smart = settings.smartProcessing
         busy = ""
         try {
             if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
             flashTick = System.nanoTime()
-            val result: PhotoProcessor.Result = when {
+            when {
+                // The phone maker's own processing, or Pro: keep exactly what the sensor gave.
                 engine.usingExtension || m == CameraMode.PRO -> {
                     val frame = engine.capture()
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location)
-                    }
+                    ProcessingQueue.submit { PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location) }
                 }
 
                 m == CameraMode.NIGHT -> {
                     busy = "Hold still…"
                     engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    val frames = engine.burst(4, 0.7f)
-                    busy = "Enhancing…"
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.saveFusion(
-                            app, frames,
-                            Fusion.Options(Fusion.Kind.DENOISE, gamma = 0.85f, saturation = 1.08f, sharpen = 0.3f),
-                            square, stamp, quality, location
-                        )
+                    val frames = engine.burst(5, 0.7f)
+                    ProcessingQueue.submit {
+                        PhotoProcessor.saveBurst(app, frames, EngineTuning.night, square, stamp, quality, location)
                     }
                 }
 
@@ -343,34 +352,48 @@ fun CameraScreen(
                     busy = "Hold still…"
                     engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
                     val frames = engine.bracket()
-                    busy = "Enhancing…"
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.saveFusion(
-                            app, frames,
-                            Fusion.Options(Fusion.Kind.HDR, contrast = 0.25f, saturation = 1.1f),
-                            square, stamp, quality, location
-                        )
+                    ProcessingQueue.submit {
+                        PhotoProcessor.saveBurst(app, frames, EngineTuning.hdr, square, stamp, quality, location)
+                    }
+                }
+
+                m == CameraMode.PHOTO && settings.enhancedZoom && engine.zoomRatio >= 1.95f -> {
+                    busy = "Hold still…"
+                    engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                    val frames = engine.burst(4, 0f)
+                    ProcessingQueue.submit {
+                        PhotoProcessor.saveBurst(app, frames, EngineTuning.zoom, square, stamp, quality, location)
                     }
                 }
 
                 m == CameraMode.PORTRAIT -> {
                     val frame = engine.capture()
-                    busy = "Enhancing…"
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.savePortrait(app, frame, square, stamp, quality, location)
+                    ProcessingQueue.submit { PhotoProcessor.savePortrait(app, frame, square, stamp, quality, location) }
+                }
+
+                smart -> {
+                    val first = engine.capture()
+                    // Dark scene: the camera raised ISO, so grab two more frames and merge for less noise.
+                    val iso = withContext(Dispatchers.Default) { PhotoProcessor.isoOf(first) }
+                    if (iso >= EngineTuning.LOW_LIGHT_ISO && flash == FlashSetting.OFF) {
+                        busy = "Hold still…"
+                        val more = engine.burst(2, 0f)
+                        val frames = listOf(first) + more
+                        ProcessingQueue.submit {
+                            PhotoProcessor.saveBurst(app, frames, EngineTuning.lowLight, square, stamp, quality, location)
+                        }
+                    } else {
+                        ProcessingQueue.submit {
+                            PhotoProcessor.saveSingle(app, first, square, stamp, quality, location, EngineTuning.photo)
+                        }
                     }
                 }
 
                 else -> {
                     val frame = engine.capture()
-                    withContext(Dispatchers.Default) {
-                        PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location)
-                    }
+                    ProcessingQueue.submit { PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location) }
                 }
             }
-            result.note?.let { app.toast(it) }
-            val uri = result.uri
-            if (uri != null) last = MediaItem(uri, false) else app.toast("Couldn't save the photo")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -687,6 +710,7 @@ fun CameraScreen(
             val message = busy
             if (!message.isNullOrEmpty()) StatusPill(message, dot = false)
             if (burstCount > 0) StatusPill("Burst $burstCount", dot = false)
+            if (processing > 0) StatusPill(if (processing == 1) "Finishing photo…" else "Finishing $processing photos…", dot = false)
             if (mode == CameraMode.SCAN && qrSheet == null) StatusPill("Point at a QR code or barcode", dot = false)
             engine.error?.let { StatusPill("Camera problem: $it", dot = false) }
         }

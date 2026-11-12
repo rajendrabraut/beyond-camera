@@ -17,21 +17,35 @@ An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
 
 ## Image engine
 
-Photos are captured at the sensor's highest resolution in maximum-quality mode. On top of that the
-app has its own multi-frame engine (`camera/Fusion.kt`), based on the same idea modern phone cameras
-use: take several frames and combine them.
+Photos are captured at the sensor's highest resolution. Plain Photo mode uses zero shutter lag when
+the camera supports it; every other mode, and phones without it, use maximum-quality capture.
 
-- **Alignment**: frames are lined up with a median-threshold-bitmap search, first on small copies, then
-  to the pixel on a full-resolution crop. This also works between different exposures.
-- **Night and Enhanced zoom**: same-exposure frames are averaged, leaving out pixels that moved, then
-  sharpened. Averaging 3–4 frames roughly halves visible noise.
-- **HDR**: a normal, a darker and a brighter frame are blended with smooth per-area weights, so
-  highlights come from the dark frame and shadows from the bright one.
-- **Phone maker's processing first**: if the phone exposes its own HDR / Night / Bokeh processing to
-  apps (CameraX Extensions), that is used instead.
+The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
+methods (no code copied):
 
-It runs in strips, so memory stays low at full resolution. It cannot replace a phone's built-in
-image signal processor, which works on raw sensor data.
+- **Burst alignment** after Google's HDR+ paper and its open analysis by Monod, Delon and Veit
+  (IPOL 2021): coarse-to-fine tile matching on an image pyramid (each tile tries its parent's motion
+  and two neighbours'), then a pixel-accurate refinement at full resolution. Each tile can move on its
+  own, so hand shake and small subject movement are handled.
+- **Robust merge**: tiles that don't match the reference, and single pixels that changed (people,
+  leaves), are left out, with thresholds set from the noise the engine measures in each photo. The
+  sharpest frame is used as the reference.
+- **HDR** after Mertens et al., "Exposure Fusion": a normal, a darker and a brighter frame are merged
+  in linear light with well-exposedness weights, then compressed so recovered highlights fit.
+- **Finishing**: local tone mapping on a smooth base layer (shadows lifted, highlights held, fine
+  detail kept), edge-aware colour-noise reduction, and sharpening that skips noise.
+
+| Mode | What the engine does |
+|---|---|
+| Photo (Smart processing on) | Finishing on every shot. In dim light (ISO 800+) it adds 2 frames and merges them |
+| Night | 5 brightened frames merged, strongest cleanup |
+| HDR | 3 exposures merged |
+| Zoom 2x and above | 4 frames merged, stronger noise-aware sharpening |
+| Pro, or the phone maker's own HDR / Night / Bokeh | Untouched camera output |
+
+Finishing runs in the background, so you can keep shooting. Everything works in strips, so memory
+stays low at full resolution. It works on the JPEGs the phone gives apps, not raw sensor data, so it
+complements the phone's built-in processing rather than replacing it.
 
 ## Other features
 
@@ -100,8 +114,9 @@ processing modes, and can take longer than a regular photo.
 
 ## Versioning
 
-Four-part versions: the last part goes up for small updates (`1.0.0.1`, `1.0.0.2`), the second part
-for big ones (`1.0.0.0`, `1.1.0.0`). Android version codes increase with every release to allow app upgrades.
+Four-part versions `a.b.c.d` (current: `1.0.0.3`). Each update raises the last part (`1.0.0.4`, …).
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.3` = `10000003`), which is
+always higher than earlier builds, so updates install over the previous version.
 
 ## Tech stack
 
