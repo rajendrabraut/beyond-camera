@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple camera mark: body, lens ring and shutter bump, centered in the 108dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,36 L48,31 L60,31 L64,36 L72,36 Q76,36 76,40 L76,70 Q76,74 72,74 L36,74 Q32,74 32,70 L32,40 Q32,36 36,36 Z" />
+    <path
+        android:fillColor="#1E1B4B"
+        android:pathData="M54,43 A12,12 0 1,1 53.99,43 Z" />
+    <path
+        android:fillColor="#A5B4FC"
+        android:pathData="M54,48 A7,7 0 1,1 53.99,48 Z" />
+</vector>
