@@ -79,6 +79,21 @@ object MediaStoreSaver {
         return File(dir, "tmp_${System.nanoTime()}.$extension")
     }
 
+    /** Replaces the bytes at the existing URI, restoring the original if the write fails. */
+    fun replacePhoto(context: Context, uri: Uri, finished: File, original: ByteArray): Boolean {
+        val resolver = context.contentResolver
+        return try {
+            finished.inputStream().use { input ->
+                val output = resolver.openOutputStream(uri, "wt") ?: return false
+                output.use { input.copyTo(it) }
+            }
+            true
+        } catch (_: Exception) {
+            runCatching { resolver.openOutputStream(uri, "wt")?.use { it.write(original) } }
+            false
+        }
+    }
+
     /** Leftover temp files from a crash or a killed process. */
     fun clearTemp(context: Context) {
         runCatching { File(context.cacheDir, "captures").listFiles()?.forEach { it.delete() } }
@@ -111,7 +126,7 @@ object MediaStoreSaver {
                 projection,
                 "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?",
                 arrayOf("$PREFIX%"),
-                "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+                "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC"
             )?.use { cursor ->
                 val id = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
                 val name = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)

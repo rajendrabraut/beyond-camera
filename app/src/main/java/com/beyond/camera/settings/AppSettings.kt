@@ -41,7 +41,7 @@ class AppSettings(context: Context) {
     var pictureQuality by enumPref("picture_quality", PictureQuality.HIGH, PictureQuality.entries)
     var volumeKeys by enumPref("volume_keys", VolumeKeyAction.SHUTTER, VolumeKeyAction.entries)
     var focusAndShoot by bool("focus_shoot", false)
-    var holdShutter by enumPref("hold_shutter", HoldShutterAction.RECORD_VIDEO, HoldShutterAction.entries)
+    var holdShutter by enumPref("hold_shutter", HoldShutterAction.BURST, HoldShutterAction.entries)
 
     // General
     var saveLocation by bool("save_location", false)

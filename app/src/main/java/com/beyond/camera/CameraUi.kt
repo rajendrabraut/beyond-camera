@@ -56,15 +56,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.beyond.camera.camera.CameraMode
 import com.beyond.camera.camera.ProCaps
 import com.beyond.camera.camera.ProState
+import com.beyond.camera.engine.ProcessingQueue
 import kotlinx.coroutines.delay
 import kotlin.math.ln
 import kotlin.math.pow
@@ -190,6 +193,8 @@ fun ShutterButton(
     video: Boolean,
     recording: Boolean,
     progress: Float?,
+    spinning: Boolean,
+    burstCount: Int,
     enabled: Boolean,
     onTap: () -> Unit,
     onLongPress: (() -> Unit)?,
@@ -200,6 +205,16 @@ fun ShutterButton(
     val release by rememberUpdatedState(onRelease)
     val inner by animateDpAsState(if (recording) 28.dp else 58.dp, label = "shutterInner")
     val corner by animateDpAsState(if (recording) 8.dp else 29.dp, label = "shutterCorner")
+    val spin = if (spinning) {
+        rememberInfiniteTransition(label = "nightCapture").animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(750, easing = LinearEasing)),
+            label = "nightRing"
+        )
+    } else {
+        null
+    }
 
     Box(
         modifier = Modifier
@@ -221,12 +236,12 @@ fun ShutterButton(
         Canvas(Modifier.fillMaxSize()) {
             val stroke = 3.dp.toPx()
             drawCircle(Color.White.copy(alpha = 0.9f), radius = size.minDimension / 2 - stroke, style = Stroke(stroke))
-            if (progress != null) {
+            if (progress != null || spin != null) {
                 val w = 5.dp.toPx()
                 drawArc(
                     color = Ui.Accent,
-                    startAngle = -90f,
-                    sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                    startAngle = spin?.value ?: -90f,
+                    sweepAngle = if (spin != null) 95f else 360f * (progress ?: 0f).coerceIn(0f, 1f),
                     useCenter = false,
                     topLeft = Offset(w / 2, w / 2),
                     size = Size(size.width - w, size.height - w),
@@ -238,8 +253,13 @@ fun ShutterButton(
             Modifier
                 .size(inner)
                 .clip(RoundedCornerShape(corner))
-                .background(if (video) Ui.Record else Color.White)
-        )
+                .background(if (video) Ui.Record else Color.White),
+            contentAlignment = Alignment.Center
+        ) {
+            if (burstCount > 0) {
+                Text(burstCount.toString(), color = Color.Black, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -255,8 +275,16 @@ fun Thumb(item: MediaItem?, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         if (item != null) {
+            val context = LocalContext.current
+            val revision = if (item.isVideo) 0 else ProcessingQueue.revision(item.uri)
+            val request = remember(item.uri, item.isVideo, revision) {
+                ImageRequest.Builder(context)
+                    .data(item.uri)
+                    .apply { if (!item.isVideo) memoryCacheKey("${item.uri}:thumb:$revision") }
+                    .build()
+            }
             AsyncImage(
-                model = item.uri,
+                model = request,
                 contentDescription = "Last capture",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

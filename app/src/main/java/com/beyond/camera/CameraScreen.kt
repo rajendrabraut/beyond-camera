@@ -53,7 +53,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -99,9 +98,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -128,6 +129,7 @@ private class Live {
     val timelapse = AtomicReference<TimelapseRecorder?>(null)
     var lastPinchAt = 0L
     var zoomTarget = 1f
+    var burstHeld = false
 }
 
 private fun clock(ms: Long): String {
@@ -177,12 +179,18 @@ fun CameraScreen(
     var torch by remember { mutableStateOf(false) }
     var pro by remember { mutableStateOf(ProState()) }
     var showPanel by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf<String?>(null) }
+    var operationBusy by remember { mutableStateOf(false) }
+    var inFlight by remember { mutableIntStateOf(0) }
+    val nightLock = remember { Mutex() }
+    var nightCapturing by remember { mutableStateOf(false) }
+    var captureOrder by remember { mutableLongStateOf(0L) }
+    var lastPhotoOrder by remember { mutableLongStateOf(0L) }
     var countdown by remember { mutableStateOf<Int?>(null) }
     var countJob by remember { mutableStateOf<Job?>(null) }
     var burstJob by remember { mutableStateOf<Job?>(null) }
     var burstCount by remember { mutableIntStateOf(0) }
     var isRecording by remember { mutableStateOf(false) }
+    val canSwitchSession = !isRecording && !operationBusy && inFlight == 0
     var recordedMs by remember { mutableLongStateOf(0L) }
     var tlFrames by remember { mutableIntStateOf(0) }
     var last by remember { mutableStateOf<MediaItem?>(null) }
@@ -239,9 +247,9 @@ fun CameraScreen(
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             scope.launch {
-                busy = "Reading picture…"
+                operationBusy = true
                 val found = withContext(Dispatchers.IO) { QrDecoder.decode(app, uri) }
-                busy = null
+                operationBusy = false
                 if (found != null) {
                     scanPaused.set(true)
                     QrHistory.add(app, found)
@@ -291,16 +299,9 @@ fun CameraScreen(
         if (SystemClock.elapsedRealtime() - live.lastPinchAt > 400) live.zoomTarget = engine.zoomRatio
     }
     LaunchedEffect(Unit) {
-        last = withContext(Dispatchers.IO) { MediaStoreSaver.latest(app) }
+        val latest = withContext(Dispatchers.IO) { MediaStoreSaver.latest(app) }
+        if (last == null) last = latest
     }
-    val processing by ProcessingQueue.pending.collectAsState()
-    LaunchedEffect(Unit) {
-        ProcessingQueue.saved.collect { uri -> last = MediaItem(uri, false) }
-    }
-    LaunchedEffect(Unit) {
-        ProcessingQueue.messages.collect { app.toast(it) }
-    }
-
     DisposableEffect(Unit) {
         VolumeKeyEvents.cameraActive = true
         view.keepScreenOn = true
@@ -315,109 +316,115 @@ fun CameraScreen(
     }
 
     // ---- Actions -------------------------------------------------------------------------------
-    // Frames are captured here; finishing runs in the background queue so the shutter frees up fast.
-    suspend fun capturePhoto() {
-        if (busy != null || !engine.photoReady) return
-        if (ProcessingQueue.isFull()) {
-            app.toast("Still finishing earlier photos…")
-            return
+    suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
+        if (!engine.photoReady) return false
+        if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
+        flashTick = System.nanoTime()
+
+        val capturedAt = System.currentTimeMillis()
+        val order = ++captureOrder
+        val saveLocation = settings.saveLocation
+        val night = mode == CameraMode.NIGHT && !engine.usingExtension
+        val edit = if (originalOnly || engine.usingExtension || mode == CameraMode.PRO) {
+            null
+        } else {
+            val enhance = when {
+                night -> EngineTuning.night
+                mode == CameraMode.PORTRAIT -> EngineTuning.portrait.takeIf { settings.smartProcessing }
+                mode == CameraMode.PHOTO && settings.hdr -> EngineTuning.hdr
+                mode == CameraMode.PHOTO && settings.enhancedZoom && engine.zoomRatio >= 1.95f -> EngineTuning.zoom
+                settings.smartProcessing -> EngineTuning.photo
+                else -> null
+            }
+            PhotoProcessor.Edit(
+                quality = settings.pictureQuality.jpeg,
+                enhance = enhance,
+                portrait = mode == CameraMode.PORTRAIT,
+                square = settings.aspectRatio == AspectRatioOption.R1_1,
+                stampAt = capturedAt.takeIf { settings.timestamp }
+            ).takeIf { it.needed }
         }
-        val m = mode
-        val square = settings.aspectRatio == AspectRatioOption.R1_1
-        val stamp = settings.timestamp
-        val quality = settings.pictureQuality.jpeg
-        val location = if (settings.saveLocation) LocationHelper.lastKnown(app) else null
-        val smart = settings.smartProcessing
-        busy = ""
+
+        suspend fun captureAndSave(mergeNight: Boolean): Boolean {
+            val frame = engine.capture()
+            val (uri, location) = withContext(Dispatchers.IO) {
+                val location = if (saveLocation) LocationHelper.lastKnown(app) else null
+                PhotoProcessor.saveOriginal(app, frame, location) to location
+            }
+            if (uri == null) {
+                app.toast("Couldn't save the photo")
+                return false
+            }
+            if (order > lastPhotoOrder) {
+                lastPhotoOrder = order
+                last = MediaItem(uri, false)
+            }
+            if (edit == null) return true
+
+            // Only Night needs extra frames. Put them in cache so queued edits retain no JPEGs.
+            val extraFrames = mutableListOf<File>()
+            var queued = false
+            try {
+                if (mergeNight) {
+                    repeat(2) {
+                        val extra = engine.capture()
+                        val file = MediaStoreSaver.tempFile(app, "jpg")
+                        extraFrames.add(file)
+                        withContext(Dispatchers.IO) { file.writeBytes(extra.jpeg) }
+                    }
+                }
+                ProcessingQueue.submit(app, uri, frame.rotation, edit, location, extraFrames)
+                queued = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The original is already in the gallery.
+            } finally {
+                if (!queued) extraFrames.forEach { it.delete() }
+            }
+            return true
+        }
+
+        inFlight++
         try {
-            if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
-            flashTick = System.nanoTime()
-            when {
-                // The phone maker's own processing, or Pro: keep exactly what the sensor gave.
-                engine.usingExtension || m == CameraMode.PRO -> {
-                    val frame = engine.capture()
-                    ProcessingQueue.submit { PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location) }
-                }
-
-                m == CameraMode.NIGHT -> {
-                    busy = "Hold still…"
-                    engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    val frames = engine.burst(5, 0.7f)
-                    ProcessingQueue.submit {
-                        PhotoProcessor.saveBurst(app, frames, EngineTuning.night, square, stamp, quality, location)
+            // Keep the three frames of each Night shot together, including during a held burst.
+            return if (night) {
+                nightLock.withLock {
+                    nightCapturing = !originalOnly
+                    try {
+                        captureAndSave(!originalOnly)
+                    } finally {
+                        nightCapturing = false
                     }
                 }
-
-                m == CameraMode.PHOTO && settings.hdr -> {
-                    busy = "Hold still…"
-                    engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    val frames = engine.bracket()
-                    ProcessingQueue.submit {
-                        PhotoProcessor.saveBurst(app, frames, EngineTuning.hdr, square, stamp, quality, location)
-                    }
-                }
-
-                m == CameraMode.PHOTO && settings.enhancedZoom && engine.zoomRatio >= 1.95f -> {
-                    busy = "Hold still…"
-                    engine.setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    val frames = engine.burst(4, 0f)
-                    ProcessingQueue.submit {
-                        PhotoProcessor.saveBurst(app, frames, EngineTuning.zoom, square, stamp, quality, location)
-                    }
-                }
-
-                m == CameraMode.PORTRAIT -> {
-                    val frame = engine.capture()
-                    val finish = if (smart) EngineTuning.portrait else null
-                    ProcessingQueue.submit {
-                        PhotoProcessor.savePortrait(app, frame, square, stamp, quality, location, finish)
-                    }
-                }
-
-                smart -> {
-                    val first = engine.capture()
-                    // Dark scene: the camera raised ISO, so grab two more frames and merge for less noise.
-                    val iso = withContext(Dispatchers.Default) { PhotoProcessor.isoOf(first) }
-                    if (iso >= EngineTuning.LOW_LIGHT_ISO && flash == FlashSetting.OFF) {
-                        busy = "Hold still…"
-                        val more = engine.burst(2, 0f)
-                        val frames = listOf(first) + more
-                        ProcessingQueue.submit {
-                            PhotoProcessor.saveBurst(app, frames, EngineTuning.lowLight, square, stamp, quality, location)
-                        }
-                    } else {
-                        ProcessingQueue.submit {
-                            PhotoProcessor.saveSingle(app, first, square, stamp, quality, location, EngineTuning.photo)
-                        }
-                    }
-                }
-
-                else -> {
-                    val frame = engine.capture()
-                    ProcessingQueue.submit { PhotoProcessor.saveSingle(app, frame, square, stamp, quality, location) }
-                }
+            } else {
+                captureAndSave(false)
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             app.toast("Couldn't take the photo")
+            return false
         } finally {
-            busy = null
-            engine.setFlashMode(flash.mode)
+            inFlight--
         }
     }
 
     fun shoot(delaySeconds: Int) {
-        if (busy != null || !engine.photoReady) return
-        countJob = scope.launch {
-            if (delaySeconds > 0) {
-                for (i in delaySeconds downTo 1) {
-                    countdown = i
-                    delay(1000)
-                }
-                countdown = null
-            }
+        if (!engine.photoReady) return
+        if (delaySeconds == 0) {
             scope.launch { capturePhoto() }
+            return
+        }
+        countJob?.cancel()
+        countJob = scope.launch {
+            for (i in delaySeconds downTo 1) {
+                countdown = i
+                delay(1000)
+            }
+            countdown = null
+            countJob = null
+            capturePhoto()
         }
     }
 
@@ -462,13 +469,13 @@ fun CameraScreen(
         val running = live.timelapse.getAndSet(null)
         if (running != null) {
             isRecording = false
-            busy = "Saving…"
+            operationBusy = true
             scope.launch {
                 val uri = withContext(Dispatchers.IO) { running.finish() }
-                busy = null
+                operationBusy = false
                 if (uri != null) last = MediaItem(uri, true) else app.toast("Too short: keep recording a little longer")
             }
-        } else if (engine.bound && busy == null) {
+        } else if (engine.bound && !operationBusy) {
             tlFrames = 0
             live.timelapse.set(
                 TimelapseRecorder(app, settings.timelapseIntervalMs.toLong()) { count ->
@@ -480,7 +487,7 @@ fun CameraScreen(
     }
 
     fun selectMode(target: CameraMode) {
-        if (isRecording || busy != null || target == mode) return
+        if (isRecording || operationBusy || inFlight != 0 || target == mode) return
         countJob?.cancel()
         countdown = null
         mode = target
@@ -506,36 +513,29 @@ fun CameraScreen(
     }
 
     fun onShutterHold() {
-        if (mode.isVideo || mode == CameraMode.SCAN || busy != null) return
+        if (mode.isVideo || mode == CameraMode.SCAN || operationBusy) return
         when (settings.holdShutter) {
             HoldShutterAction.RECORD_VIDEO -> {
+                if (inFlight != 0) return
                 app.buzz()
                 autoRecord = true
                 selectMode(CameraMode.VIDEO)
             }
 
             HoldShutterAction.BURST -> {
-                if (!engine.photoReady) return
+                if (!engine.photoReady || burstJob?.isActive == true) return
+                countJob?.cancel()
+                countdown = null
                 app.buzz()
+                live.burstHeld = true
                 burstJob = scope.launch {
-                    busy = ""
                     try {
-                        var count = 0
-                        while (isActive && count < 20) {
-                            val frame = engine.capture()
-                            count++
-                            burstCount = count
-                            val saved = withContext(Dispatchers.Default) {
-                                PhotoProcessor.saveSingle(app, frame, false, false, settings.pictureQuality.jpeg, null)
-                            }
-                            saved.uri?.let { last = MediaItem(it, false) }
+                        while (live.burstHeld && burstCount < 300) {
+                            if (!capturePhoto(originalOnly = true)) break
+                            burstCount++
                         }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        app.toast("Burst stopped")
                     } finally {
-                        busy = null
+                        live.burstHeld = false
                         burstCount = 0
                     }
                 }
@@ -546,8 +546,7 @@ fun CameraScreen(
     }
 
     fun onShutterRelease() {
-        burstJob?.cancel()
-        burstJob = null
+        live.burstHeld = false
     }
 
     // Hold-to-record: start as soon as the video session is ready.
@@ -677,7 +676,7 @@ fun CameraScreen(
                 }
             }
             if (mode == CameraMode.PHOTO) {
-                TextPill("HDR", settings.hdr) { if (busy == null) settings.hdr = !settings.hdr }
+                TextPill("HDR", settings.hdr) { if (inFlight == 0) settings.hdr = !settings.hdr }
             }
             if (photoMode && settings.timerSeconds > 0) TextPill("${settings.timerSeconds}s", false)
             Spacer(Modifier.weight(1f))
@@ -690,10 +689,10 @@ fun CameraScreen(
                     showPanel = !showPanel
                 }
             }
-            CircleIcon(Icons.Filled.Settings, "Settings", enabled = !isRecording && busy == null, onClick = onOpenSettings)
+            CircleIcon(Icons.Filled.Settings, "Settings", enabled = canSwitchSession, onClick = { if (inFlight == 0) onOpenSettings() })
         }
 
-        // Recording / processing status
+        // Recording and scan status
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -710,10 +709,6 @@ fun CameraScreen(
                 }
                 StatusPill(text, dot = true)
             }
-            val message = busy
-            if (!message.isNullOrEmpty()) StatusPill(message, dot = false)
-            if (burstCount > 0) StatusPill("Burst $burstCount", dot = false)
-            if (processing > 0) StatusPill(if (processing == 1) "Finishing photo…" else "Finishing $processing photos…", dot = false)
             if (mode == CameraMode.SCAN && qrSheet == null) StatusPill("Point at a QR code or barcode", dot = false)
             engine.error?.let { StatusPill("Camera problem: $it", dot = false) }
         }
@@ -750,7 +745,7 @@ fun CameraScreen(
             }
 
             if (showPanel) {
-                QuickPanel(mode, settings)
+                QuickPanel(mode, settings) { if (inFlight == 0) settings.aspectRatio = it }
                 Spacer(Modifier.height(10.dp))
             } else if (mode != CameraMode.SCAN) {
                 ZoomBar(engine.zoomRatio, engine.minZoom, engine.maxZoom) {
@@ -760,7 +755,7 @@ fun CameraScreen(
                 Spacer(Modifier.height(10.dp))
             }
 
-            ModeStrip(mode, enabled = !isRecording && busy == null) { selectMode(it) }
+            ModeStrip(mode, enabled = canSwitchSession) { selectMode(it) }
             Spacer(Modifier.height(14.dp))
 
             Row(
@@ -770,7 +765,7 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Thumb(last, onClick = { if (!isRecording && busy == null) onOpenViewer() })
+                Thumb(last, onClick = { if (!isRecording && !operationBusy && inFlight == 0) onOpenViewer() })
 
                 if (mode == CameraMode.SCAN) {
                     Text(
@@ -793,7 +788,9 @@ fun CameraScreen(
                         } else {
                             null
                         },
-                        enabled = engine.bound && (busy == null || burstJob != null),
+                        spinning = nightCapturing,
+                        burstCount = burstCount,
+                        enabled = if (photoMode) engine.photoReady else engine.bound && !operationBusy,
                         onTap = { onShutterTap() },
                         onLongPress = { onShutterHold() },
                         onRelease = { onShutterRelease() }
@@ -801,7 +798,8 @@ fun CameraScreen(
                 }
 
                 if (engine.canSwitch) {
-                    CircleIcon(Icons.Filled.Cameraswitch, "Switch camera", enabled = !isRecording && busy == null) {
+                    CircleIcon(Icons.Filled.Cameraswitch, "Switch camera", enabled = canSwitchSession) {
+                        if (inFlight != 0) return@CircleIcon
                         front = !front
                         Session.front = front
                     }
@@ -844,7 +842,11 @@ private fun StatusPill(text: String, dot: Boolean) {
 
 /** Options that change often, shown just above the mode strip. */
 @Composable
-private fun QuickPanel(mode: CameraMode, settings: com.beyond.camera.settings.AppSettings) {
+private fun QuickPanel(
+    mode: CameraMode,
+    settings: com.beyond.camera.settings.AppSettings,
+    onShape: (AspectRatioOption) -> Unit
+) {
     Column(
         modifier = Modifier
             .padding(horizontal = 14.dp)
@@ -888,7 +890,7 @@ private fun QuickPanel(mode: CameraMode, settings: com.beyond.camera.settings.Ap
                     options = AspectRatioOption.entries,
                     selected = settings.aspectRatio,
                     label = { it.label }
-                ) { settings.aspectRatio = it }
+                ) { onShape(it) }
                 PanelLabel("Timer")
                 Segmented(
                     options = listOf(0, 3, 5, 10),

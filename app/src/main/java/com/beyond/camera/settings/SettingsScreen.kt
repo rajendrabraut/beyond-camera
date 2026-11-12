@@ -96,12 +96,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ChoiceRow("Picture quality", PictureQuality.entries, s.pictureQuality, { it.label }) { s.pictureQuality = it }
                 SwitchRow(
                     "Smart processing",
-                    "Balances shadows and highlights, cleans colour noise, and merges extra shots in dim light. Off keeps the camera's original photo.",
+                    "Balances shadows and highlights and reduces colour noise in the background.",
                     s.smartProcessing
                 ) { s.smartProcessing = it }
                 SwitchRow(
                     "Enhanced zoom",
-                    "At 2x and above, merges several shots for a cleaner, sharper photo. Takes a moment longer.",
+                    "Sharpens photos taken at 2x zoom and above in the background.",
                     s.enhancedZoom
                 ) { s.enhancedZoom = it }
             }
