@@ -1,0 +1,156 @@
+name: Android build
+
+# Builds debug + release APKs on every push / pull request to main and on demand.
+# Pushing a tag like v1.0.0.4 also publishes a GitHub Release with both APKs.
+#
+# Release signing uses these repository secrets (Settings > Secrets and variables > Actions):
+#   BC_KEYSTORE_B64      base64 of the release .jks file
+#   BC_KEYSTORE_PASSWORD keystore password
+#   BC_KEY_ALIAS         key alias
+#   BC_KEY_PASSWORD      key password
+# Without them, normal builds sign the release APK with a throwaway debug key (still installable),
+# and tag releases fail on purpose so an unsigned release is never published.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle (validates the wrapper, caches dependencies)
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - name: Read app version
+        id: version
+        run: |
+          version=$(sed -n 's/^ *versionName *= *"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$version" ]; then echo "versionName not found in app/build.gradle.kts"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "App version: $version"
+
+      - name: Tag must match the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.version.outputs.version }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match versionName ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Set up release signing
+        env:
+          KEYSTORE_B64: ${{ secrets.BC_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BC_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BC_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            {
+              echo "storeFile=$RUNNER_TEMP/release.jks"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > keystore.properties
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+            echo "Release APK will be signed with the release key."
+          else
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+            echo "::warning::Release signing secrets are not set; the release APK is signed with a debug key."
+          fi
+
+      - name: Refuse to publish an unsigned release
+        if: startsWith(github.ref, 'refs/tags/v') && env.SIGNED != 'true'
+        run: |
+          echo "Tag builds need the BC_* signing secrets."
+          exit 1
+
+      - name: Build debug and release APKs
+        run: ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
+
+      - name: Remove signing files
+        if: always()
+        run: rm -f keystore.properties "$RUNNER_TEMP/release.jks"
+
+      - name: Name the APKs
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/BeyondCamera-$v-debug.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/BeyondCamera-$v-release.apk"
+          ls -l dist
+
+      - name: Verify signatures and version
+        run: |
+          bt="$ANDROID_HOME/build-tools/36.0.0"
+          for apk in dist/*.apk; do
+            echo "== $apk"
+            "$bt/apksigner" verify --print-certs "$apk" | grep "certificate DN"
+            "$bt/aapt2" dump badging "$apk" | grep -E "^package:|uses-permission: name='android.permission.INTERNET'" || true
+            if "$bt/aapt2" dump permissions "$apk" | grep -q "android.permission.INTERNET"; then
+              echo "INTERNET permission found: the app must stay offline"
+              exit 1
+            fi
+          done
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: BeyondCamera-${{ steps.version.outputs.version }}-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APKs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: BeyondCamera-${{ needs.build.outputs.version }}-apks
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Beyond Camera ${{ needs.build.outputs.version }}" \
+            --generate-notes \
+            --latest
