@@ -100,6 +100,8 @@ class CameraEngine(private val context: Context) {
         private set
     var videoReady by mutableStateOf(false)
         private set
+    var zeroShutterLag by mutableStateOf(false)
+        private set
     var photoReady by mutableStateOf(false)
         private set
     var proCaps by mutableStateOf<ProCaps?>(null)
@@ -148,6 +150,7 @@ class CameraEngine(private val context: Context) {
 
             p.unbindAll()
             zoomLiveData?.removeObserver(zoomObserver)
+            zeroShutterLag = false
             imageCapture = null
             videoCapture = null
             stabilized = false
@@ -164,10 +167,16 @@ class CameraEngine(private val context: Context) {
 
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
-                    val captureMode = if (cfg.mode == CameraMode.PHOTO && !cfg.hdr) {
+                    // Zero shutter lag only where the camera really supports it (otherwise CameraX would
+                    // silently fall back to the lower-quality low-latency mode). Everything else, and every
+                    // multi-frame mode, uses maximum quality.
+                    val zsl = cfg.mode == CameraMode.PHOTO && !cfg.hdr && !extensionOn &&
+                        runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
+                    zeroShutterLag = zsl
+                    val captureMode = if (zsl) {
                         ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                     } else {
-                        ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                        ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     }
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(captureMode)

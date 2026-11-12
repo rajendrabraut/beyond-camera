@@ -56,6 +56,7 @@ class AppSettings(context: Context) {
     var videoResolution by enumPref("video_resolution", VideoResolution.FHD, VideoResolution.entries)
     var hdr by bool("hdr", false)
     var enhancedZoom by bool("enhanced_zoom", true)
+    var smartProcessing by bool("smart_processing", true)
     var timelapseIntervalMs by int("timelapse_interval", 1000)
     var shortVideoSeconds by int("short_video_seconds", 15)
 

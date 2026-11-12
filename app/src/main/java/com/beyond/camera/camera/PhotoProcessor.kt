@@ -14,6 +14,7 @@ import android.location.Location
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import com.beyond.camera.MediaStoreSaver
+import com.beyond.camera.engine.BurstEngine
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.Segmentation
@@ -48,15 +49,28 @@ object PhotoProcessor {
 
     class Result(val uri: Uri?, val note: String? = null)
 
-    /** A single shot. Untouched sensor JPEG unless a square crop or time stamp is requested. */
+    /** ISO the camera used for this frame (from its EXIF), or 0 if unknown. */
+    fun isoOf(frame: Frame): Int = runCatching {
+        ExifInterface(ByteArrayInputStream(frame.jpeg)).getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0)
+    }.getOrDefault(0)
+
+    /**
+     * A single shot. With [enhance] it is finished by [BurstEngine]; without it the sensor JPEG is kept
+     * untouched unless a square crop or time stamp is requested.
+     */
     fun saveSingle(
         context: Context,
         frame: Frame,
         square: Boolean,
         stamp: Boolean,
         quality: Int,
-        location: Location?
+        location: Location?,
+        enhance: BurstEngine.Params? = null
     ): Result {
+        if (enhance != null) {
+            val finished = BurstEngine.enhanceSingle(frame.jpeg, enhance)
+            if (finished != null) return saveProcessed(context, finished, frame, square, stamp, quality, location)
+        }
         if (square || stamp) {
             val upright = decodeUpright(frame, Int.MAX_VALUE)
             if (upright != null) {
@@ -67,32 +81,44 @@ object PhotoProcessor {
         return Result(saveRaw(context, frame, location))
     }
 
-    /** Several frames merged by [Fusion]. Falls back to the first frame if merging fails. */
-    fun saveFusion(
+    /** Several frames aligned and merged by [BurstEngine]. Falls back to the first frame if merging fails. */
+    fun saveBurst(
         context: Context,
         frames: List<Frame>,
-        options: Fusion.Options,
+        params: BurstEngine.Params,
         square: Boolean,
         stamp: Boolean,
         quality: Int,
         location: Location?
     ): Result {
         val first = frames.firstOrNull() ?: return Result(null)
-        val merged: Bitmap? = if (frames.size > 1) Fusion.merge(frames.map { it.jpeg }, options) else null
+        val merged: Bitmap? = BurstEngine.process(frames.map { it.jpeg }, params)
         if (merged == null) {
             val plain = saveSingle(context, first, square, stamp, quality, location)
-            return Result(plain.uri, if (frames.size > 1) "Saved without enhancement" else null)
+            return Result(plain.uri, if (frames.size > 1) "Saved without enhancement (not enough memory)" else null)
         }
-        var bitmap: Bitmap = merged
-        var rotation = first.rotation
+        return saveProcessed(context, merged, first, square, stamp, quality, location)
+    }
+
+    private fun saveProcessed(
+        context: Context,
+        bitmap: Bitmap,
+        source: Frame,
+        square: Boolean,
+        stamp: Boolean,
+        quality: Int,
+        location: Location?
+    ): Result {
+        var out = bitmap
+        var rotation = source.rotation
         if (square || stamp) {
-            val upright = rotate(bitmap, rotation)
+            val upright = rotate(out, rotation)
             if (upright != null) {
-                bitmap = decorate(upright, square, stamp)
+                out = decorate(upright, square, stamp)
                 rotation = 0
             }
         }
-        return Result(saveBitmap(context, bitmap, rotation, quality, location, first.jpeg))
+        return Result(saveBitmap(context, out, rotation, quality, location, source.jpeg))
     }
 
     /** Portrait: keeps the person sharp and blurs the background. */
