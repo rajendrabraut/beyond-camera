@@ -1,4 +1,4 @@
-# Beyond Camera
+# Beyond Camera v2
 
 An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
 
@@ -91,6 +91,12 @@ keyPassword=...
 ```
 
 If neither file exists, the release build is signed with the debug key, so it still installs but can't be published.
+
+## Version 2 camera updates
+
+Regular Photo mode uses CameraX zero-shutter-lag capture when the device supports it and falls back
+to low-latency capture otherwise. Night, HDR, and Portrait remain separate multi-frame or image
+processing modes, and can take longer than a regular photo.
 
 ## Versioning
 
