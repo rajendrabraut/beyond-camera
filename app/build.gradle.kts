@@ -23,8 +23,9 @@ android {
         applicationId = "com.beyond.camera"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // a.b.c.d -> a*1000000 + b*10000 + c*100 + d
+        versionCode = 1010000
+        versionName = "1.1.0.0"
     }
 
     signingConfigs {
@@ -61,6 +62,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -82,6 +84,15 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-video:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("androidx.camera:camera-extensions:$cameraxVersion")
+
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // QR / barcode scanning and generation: pure Java, fully offline, no telemetry.
+    implementation("com.google.zxing:core:3.5.3")
+    // On-device person segmentation for Portrait (model bundled; network access is stripped in the manifest).
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-video:2.7.0")
 }
