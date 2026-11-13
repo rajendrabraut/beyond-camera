@@ -19,9 +19,10 @@ when you refresh its music catalog or download songs. Bitchat shares with nearby
 
 ## Image engine
 
-Photo mode requests the highest available resolution and uses zero shutter lag on supported cameras
-with flash off. Other phones use CameraX's low-latency capture in Photo mode. HDR runs in software
-after capture. Pro, Portrait and Night use maximum-quality capture.
+With flash off, Photo mode saves the newest frame available at each shutter tap. The camera
+stream determines the available resolution. JPEG encoding and HDR finishing run afterward.
+CameraX still capture handles flash and devices that cannot provide the additional frame stream.
+Pro, Portrait and Night use maximum-quality still capture.
 
 The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
 methods (no code copied):
@@ -110,8 +111,9 @@ If neither file exists, the release build is signed with the debug key, so it st
 
 ## Camera updates
 
-The shutter dims while the camera captures a shot. Taps during that interval are ignored.
-Saving and enhancement can continue while the shutter is ready for another photo.
+Rapid taps in Photo mode can save separate frames while JPEG encoding and enhancement run.
+If two taps arrive between camera frames, both photos can show the same frame. The shutter dims
+while a flash or other still capture is in progress.
 Night saves its first frame while the shutter ring indicates the three-frame capture.
 
 ## Installing from GitHub Releases

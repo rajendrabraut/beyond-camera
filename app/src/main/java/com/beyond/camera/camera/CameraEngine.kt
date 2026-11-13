@@ -77,6 +77,7 @@ class CameraEngine(private val context: Context) {
 
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
+    private var photoFrames: PhotoFrames? = null
     private var videoCapture: VideoCapture<Recorder>? = null
 
     var zoomRatio by mutableFloatStateOf(1f)
@@ -103,6 +104,7 @@ class CameraEngine(private val context: Context) {
         private set
     var photoReady by mutableStateOf(false)
         private set
+    internal fun photoSnapshot(): PhotoFrames.Snapshot? = photoFrames?.snapshot()
     var proCaps by mutableStateOf<ProCaps?>(null)
         private set
     var error by mutableStateOf<String?>(null)
@@ -117,6 +119,7 @@ class CameraEngine(private val context: Context) {
         bound = false
         videoReady = false
         photoReady = false
+        photoFrames = null
         error = null
         try {
             val p = provider ?: ProcessCameraProvider.getInstance(context).await(mainExecutor).also { provider = it }
@@ -186,8 +189,19 @@ class CameraEngine(private val context: Context) {
                         .build()
                     imageCapture = capture
                     cases.add(capture)
-                    if (cfg.mode == CameraMode.PHOTO && cfg.scanInPhoto && !extensionOn && base == CameraSelector.DEFAULT_BACK_CAMERA) {
-                        optionalAnalysis = buildAnalysis(aspect, Size(1280, 720), analyzer)
+                    if (cfg.mode == CameraMode.PHOTO) {
+                        val frames = PhotoFrames()
+                        photoFrames = frames
+                        val scan = cfg.scanInPhoto && base == CameraSelector.DEFAULT_BACK_CAMERA
+                        optionalAnalysis = buildAnalysis(aspect, Size(1920, 1440), ImageAnalysis.Analyzer { image ->
+                            try {
+                                frames.update(image)
+                            } catch (_: RuntimeException) {
+                                // Some vendor buffers are unavailable during camera reconfiguration.
+                            } finally {
+                                if (scan) analyzer.analyze(image) else image.close()
+                            }
+                        }, ImageAnalysis.OUTPUT_IMAGE_FORMAT_NV21)
                         cases.add(optionalAnalysis)
                     }
                 }
@@ -224,7 +238,10 @@ class CameraEngine(private val context: Context) {
                 p.unbindAll()
                 val extra = optionalAnalysis
                 if (extra == null && !extensionOn) throw first
-                if (extra != null) cases.remove(extra)
+                if (extra != null) {
+                    cases.remove(extra)
+                    photoFrames = null
+                }
                 extensionOn = false
                 p.bindToLifecycle(owner, base, *cases.toTypedArray())
             }
@@ -244,9 +261,13 @@ class CameraEngine(private val context: Context) {
         }
     }
 
-    private fun buildAnalysis(aspect: AspectRatioStrategy, target: Size, analyzer: ImageAnalysis.Analyzer): ImageAnalysis {
+    private fun buildAnalysis(
+        aspect: AspectRatioStrategy, target: Size, analyzer: ImageAnalysis.Analyzer,
+        format: Int = ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888
+    ): ImageAnalysis {
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(format)
             .setResolutionSelector(
                 ResolutionSelector.Builder()
                     .setAspectRatioStrategy(aspect)
@@ -399,6 +420,7 @@ class CameraEngine(private val context: Context) {
         runCatching { provider?.unbindAll() }
         analysisExecutor.shutdown()
         captureExecutor.shutdown()
+        photoFrames = null
         bound = false
     }
 }

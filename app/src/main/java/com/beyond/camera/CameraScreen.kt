@@ -315,13 +315,16 @@ fun CameraScreen(
 
     // ---- Actions -------------------------------------------------------------------------------
     suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
-        if (!engine.photoReady || capturing || operationBusy) return false
+        if (!engine.photoReady || operationBusy) return false
+        val snapshot = if (mode == CameraMode.PHOTO && flash == FlashSetting.OFF) engine.photoSnapshot() else null
+        if (snapshot == null && capturing) return false
         if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
         flashTick = System.nanoTime()
 
         val capturedAt = System.currentTimeMillis()
         val order = ++captureOrder
         val saveLocation = settings.saveLocation
+        val jpegQuality = settings.pictureQuality.jpeg
         val night = mode == CameraMode.NIGHT && !engine.usingExtension
         val edit = if (originalOnly || engine.usingExtension || mode == CameraMode.PRO) {
             null
@@ -335,7 +338,7 @@ fun CameraScreen(
                 else -> null
             }
             PhotoProcessor.Edit(
-                quality = settings.pictureQuality.jpeg,
+                quality = jpegQuality,
                 enhance = enhance,
                 portrait = mode == CameraMode.PORTRAIT,
                 square = settings.aspectRatio == AspectRatioOption.R1_1,
@@ -344,16 +347,20 @@ fun CameraScreen(
         }
 
         val mergeNight = night && !originalOnly
-        capturing = true
-        nightCapturing = mergeNight
+        if (snapshot == null) {
+            capturing = true
+            nightCapturing = mergeNight
+        }
         inFlight++
         try {
-            val frame = try {
-                engine.capture()
-            } finally {
-                // Once CameraX has delivered the JPEG, the next tap can start a new shot.
-                // Keep the shutter busy across all three frames of a Night shot.
-                if (!mergeNight) capturing = false
+            val frame = if (snapshot != null) {
+                withContext(Dispatchers.Default) { snapshot.encode(jpegQuality) }
+            } else {
+                try {
+                    engine.capture()
+                } finally {
+                    if (!mergeNight) capturing = false
+                }
             }
             val (uri, location) = withContext(Dispatchers.IO) {
                 val location = if (saveLocation) LocationHelper.lastKnown(app) else null
@@ -406,7 +413,7 @@ fun CameraScreen(
     }
 
     fun shoot(delaySeconds: Int) {
-        if (!engine.photoReady || capturing || operationBusy) return
+        if (!engine.photoReady || operationBusy) return
         if (delaySeconds == 0) {
             scope.launch(start = CoroutineStart.UNDISPATCHED) { capturePhoto() }
             return
