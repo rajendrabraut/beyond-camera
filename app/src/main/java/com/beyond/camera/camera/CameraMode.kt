@@ -19,7 +19,6 @@ data class BindConfig(
     val front: Boolean,
     val wide: Boolean,
     val jpegQuality: Int,
-    val hdr: Boolean,
     val videoRes: VideoResolution,
     val scanInPhoto: Boolean
 )

@@ -64,6 +64,7 @@ import kotlin.coroutines.resumeWithException
 class CameraEngine(private val context: Context) {
     private val mainExecutor: Executor = ContextCompat.getMainExecutor(context)
     val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val captureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     private var provider: ProcessCameraProvider? = null
     private var extensions: ExtensionsManager? = null
@@ -133,7 +134,6 @@ class CameraEngine(private val context: Context) {
             val extMode = when {
                 cfg.mode == CameraMode.NIGHT -> ExtensionMode.NIGHT
                 cfg.mode == CameraMode.PORTRAIT -> ExtensionMode.BOKEH
-                cfg.mode == CameraMode.PHOTO && cfg.hdr -> ExtensionMode.HDR
                 else -> null
             }
             if (extMode != null) {
@@ -165,16 +165,14 @@ class CameraEngine(private val context: Context) {
 
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
-                    // Zero shutter lag only where the camera really supports it (otherwise CameraX would
-                    // silently fall back to the lower-quality low-latency mode). Everything else, and every
-                    // multi-frame mode, uses maximum quality.
+                    // Standard Photo uses software HDR after capture so OEM HDR can't delay the shutter.
                     val zsl = cfg.mode == CameraMode.PHOTO && !extensionOn &&
                         runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
                     zeroShutterLag = zsl
-                    val captureMode = if (zsl) {
-                        ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
-                    } else {
-                        ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                    val captureMode = when {
+                        zsl -> ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
+                        cfg.mode == CameraMode.PHOTO -> ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                        else -> ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     }
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(captureMode)
@@ -359,19 +357,21 @@ class CameraEngine(private val context: Context) {
     suspend fun capture(): Frame {
         val capture = imageCapture ?: throw IllegalStateException("Camera not ready")
         return suspendCancellableCoroutine { cont ->
-            capture.takePicture(analysisExecutor, object : ImageCapture.OnImageCapturedCallback() {
+            capture.takePicture(captureExecutor, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
-                    try {
+                    val frame = try {
                         if (!cont.isActive) return
                         val buffer = image.planes[0].buffer
                         val bytes = ByteArray(buffer.remaining())
                         buffer.get(bytes)
-                        cont.resume(Frame(bytes, image.imageInfo.rotationDegrees))
+                        Frame(bytes, image.imageInfo.rotationDegrees)
                     } catch (e: Exception) {
                         cont.resumeWithException(e)
+                        return
                     } finally {
                         image.close()
                     }
+                    cont.resume(frame)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -398,6 +398,7 @@ class CameraEngine(private val context: Context) {
         zoomLiveData?.removeObserver(zoomObserver)
         runCatching { provider?.unbindAll() }
         analysisExecutor.shutdown()
+        captureExecutor.shutdown()
         bound = false
     }
 }

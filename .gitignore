@@ -1,5 +1,6 @@
 # Android / Gradle
 .gradle/
+.kotlin/
 build/
 /local.properties
 /captures
@@ -10,6 +11,7 @@ build/
 *.keystore
 *.jks
 keystore.properties
+liveclips-keystore.properties
 
 # Android Studio / IntelliJ
 .idea/

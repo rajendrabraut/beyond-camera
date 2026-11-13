@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "BeyondCamera"
 include(":app")
+include(":liveclips")

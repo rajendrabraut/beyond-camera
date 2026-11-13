@@ -17,8 +17,9 @@ An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
 
 ## Image engine
 
-Photos are captured at the sensor's highest resolution. Photo mode can use CameraX zero shutter lag
-when the device supports it, including software HDR. Other modes use maximum-quality capture.
+Photo mode requests the highest available resolution and uses zero shutter lag on supported cameras
+with flash off. Other phones use CameraX's low-latency capture in Photo mode. HDR runs in software
+after capture. Pro, Portrait and Night use maximum-quality capture.
 
 The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
 methods (no code copied):
@@ -107,14 +108,20 @@ If neither file exists, the release build is signed with the debug key, so it st
 
 ## Camera updates
 
-Each tap queues a CameraX capture request. Night saves its first frame while the shutter ring indicates
-the three-frame capture. Enhancement runs after the original is saved.
+The shutter dims while the camera captures a shot. Taps during that interval are ignored.
+Saving and enhancement can continue while the shutter is ready for another photo.
+Night saves its first frame while the shutter ring indicates the three-frame capture.
+
+## Installing from GitHub Releases
+
+Use the `-release.apk` file for installation and future updates. Android requires updates to use
+the installed app's signing certificate. If you installed a `-debug.apk`, back up any app data you
+want to keep before uninstalling it and switching to the release build.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.5`). Each update raises the last part (`1.0.0.6`, …).
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.5` = `10000005`), which is
-always higher than earlier builds, so updates install over the previous version.
+Four-part versions `a.b.c.d` (current: `1.0.0.6`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.6` = `10000006`).
 
 ## Tech stack
 
