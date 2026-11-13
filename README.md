@@ -1,6 +1,8 @@
 # Beyond Camera
 
-An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
+Beyond is one Android app built with Kotlin, Jetpack Compose and CameraX. Its home screen opens
+**Camera**, **Live Clips**, or **Bitchat**. Camera works offline. Live Clips uses internet access
+when you refresh its music catalog or download songs. Bitchat shares with nearby devices.
 
 ## Modes
 
@@ -114,14 +116,14 @@ Night saves its first frame while the shutter ring indicates the three-frame cap
 
 ## Installing from GitHub Releases
 
-Use the `-release.apk` file for installation and future updates. Android requires updates to use
-the installed app's signing certificate. If you installed a `-debug.apk`, back up any app data you
-want to keep before uninstalling it and switching to the release build.
+Install `-release.apk` to update the existing Beyond Camera installation. The release retains
+the `com.beyond.camera` package and signing certificate. Install `-debug.apk` to test the build
+alongside the release under the separate `com.beyond.camera.debug` package.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.6`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.6` = `10000006`).
+Four-part versions `a.b.c.d` (current: `1.0.0.7`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.7` = `10000007`).
 
 ## Tech stack
 

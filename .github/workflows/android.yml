@@ -1,7 +1,7 @@
 name: Android build
 
 # Builds debug + release APKs on every push / pull request to main and on demand.
-# Pushing a version tag publishes only the release-signed APK to GitHub Releases.
+# A version tag publishes the signed update and the separately installable debug build.
 #
 # Release signing uses these repository secrets (Settings > Secrets and variables > Actions):
 #   BC_KEYSTORE_B64      base64 of the release .jks file
@@ -96,8 +96,8 @@ jobs:
           echo "Tag builds need the BC_* signing secrets."
           exit 1
 
-      - name: Build debug and release APKs
-        run: ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
+      - name: Build and verify Beyond
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :liveclips:testDebugUnitTest :app:lintRelease --no-daemon --stacktrace
 
       - name: Remove signing files
         if: always()
@@ -118,12 +118,10 @@ jobs:
           for apk in dist/*.apk; do
             echo "== $apk"
             "$bt/apksigner" verify --print-certs "$apk" | grep "certificate DN"
-            "$bt/aapt2" dump badging "$apk" | grep "^package:" || true
-            if "$bt/aapt2" dump permissions "$apk" | grep -Eq "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE)"; then
-              echo "Network permission found. The app must stay offline."
-              exit 1
-            fi
+            "$bt/aapt2" dump badging "$apk" | sed -n '/^package:/p'
           done
+          "$bt/aapt2" dump packagename dist/*-release.apk | grep -Fx 'com.beyond.camera'
+          "$bt/aapt2" dump packagename dist/*-debug.apk | grep -Fx 'com.beyond.camera.debug'
 
       - name: Verify the published signing certificate
         if: startsWith(github.ref, 'refs/tags/v')
@@ -157,8 +155,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*-release.apk \
+          gh release create "$GITHUB_REF_NAME" dist/*.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Beyond Camera ${{ needs.build.outputs.version }}" \
+            --title "Beyond ${{ needs.build.outputs.version }}" \
             --generate-notes \
             --latest

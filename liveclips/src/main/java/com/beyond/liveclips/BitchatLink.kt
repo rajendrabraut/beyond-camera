@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,10 +22,16 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.Closeable
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.Socket
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.UUID
 
 internal data class FileOffer(val name: String, val size: Long, val digest: ByteArray, val credit: String)
+internal const val BLUETOOTH_LIMIT = 32_000_000L
 
 /** Uses Android's authenticated Bluetooth Classic link for direct offline transfers. */
 @SuppressLint("MissingPermission")
@@ -38,61 +45,92 @@ internal class BitchatLink(
         data class Status(val message: String, val connected: Boolean = false) : Event
         data class Message(val text: String, val incoming: Boolean) : Event
         data class Offer(val offer: FileOffer?) : Event
+        data class Verify(val code: String?) : Event
         data class Received(val file: File, val credit: String) : Event
     }
 
     val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
     private var session: Job? = null
-    @Volatile private var socket: BluetoothSocket? = null
+    @Volatile private var socket: Closeable? = null
     @Volatile private var server: BluetoothServerSocket? = null
     private var active: Connection? = null
+    private var confirmation: CompletableDeferred<Boolean>? = null
+    val wifiConnected: Boolean get() = active?.limit == Long.MAX_VALUE
     @Volatile private var generation = 0
 
     fun paired(): List<BluetoothDevice> = adapter?.bondedDevices.orEmpty().sortedBy { it.name ?: it.address }
 
-    fun listen() = start("Waiting for a paired device…") {
+    fun listen() = start("Waiting for a paired device…", BLUETOOTH_LIMIT - 1) { attempt ->
         val listening = checkNotNull(adapter).listenUsingRfcommWithServiceRecord("Beyond Live Clips", SERVICE)
         server = listening
         try {
-                    listening.accept(120_000)
+            if (generation != attempt) throw CancellationException()
+            bluetoothLink(listening.accept(120_000))
         } finally {
             listening.close()
             if (server === listening) server = null
         }
     }
 
-    fun connect(device: BluetoothDevice) = start("Connecting to ${device.name ?: "paired device"}…") {
+    fun connect(device: BluetoothDevice) = start("Connecting to ${device.name ?: "paired device"}…", BLUETOOTH_LIMIT - 1) { attempt ->
         val connecting = device.createRfcommSocketToServiceRecord(SERVICE)
         socket = connecting
         try {
+            if (generation != attempt) throw CancellationException()
             connecting.connect()
-            connecting
+            bluetoothLink(connecting)
         } catch (e: Exception) {
             connecting.close()
             throw e
         }
     }
 
-    private fun start(status: String, open: () -> BluetoothSocket) {
+    fun connectWifi(peer: String, open: suspend () -> Socket) =
+        start("Connecting over Wi-Fi Direct…", Long.MAX_VALUE) { attempt ->
+            val connecting = open()
+            if (generation != attempt) {
+                connecting.close()
+                throw CancellationException()
+            }
+            Link(connecting, connecting.getInputStream(), connecting.getOutputStream(), peer)
+        }
+
+    private fun bluetoothLink(socket: BluetoothSocket) =
+        Link(socket, socket.inputStream, socket.outputStream, socket.remoteDevice.name ?: "paired device")
+
+    private data class Link(
+        val socket: Closeable,
+        val input: InputStream,
+        val output: OutputStream,
+        val name: String
+    )
+
+    private fun start(status: String, limit: Long, open: suspend (Int) -> Link) {
         close()
         val attempt = generation
         onEvent(Event.Status(status))
         session = scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    val connected = open()
-                    socket = connected
-                    connected.use { bluetooth ->
-                        val input = DataInputStream(BufferedInputStream(bluetooth.inputStream))
-                        val output = DataOutputStream(BufferedOutputStream(bluetooth.outputStream))
-                        output.writeUTF("BeyondLiveClips/Bitchat/1")
+                    val connected = open(attempt)
+                    socket = connected.socket
+                    connected.socket.use {
+                        if (generation != attempt) throw CancellationException()
+                        val input = DataInputStream(BufferedInputStream(connected.input))
+                        val output = DataOutputStream(BufferedOutputStream(connected.output))
+                        output.writeUTF("Beyond/Bitchat/2")
                         output.flush()
-                        require(input.readUTF() == "BeyondLiveClips/Bitchat/1") { "This device uses a different sharing protocol." }
-                        val connection = Connection(input, output)
+                        require(input.readUTF() == "Beyond/Bitchat/2") { "Update both devices to the same Beyond version." }
+                        if (connected.socket is Socket) {
+                            verifyWifi(input, output, attempt)
+                            connected.socket.soTimeout = 0
+                        }
+                        val connection = Connection(input, output, limit)
                         withContext(Dispatchers.Main) {
                             if (generation != attempt) throw CancellationException()
                             active = connection
-                            onEvent(Event.Status("Connected to ${bluetooth.remoteDevice.name ?: "paired device"}.", true))
+                            val transport = if (limit == Long.MAX_VALUE) "Wi-Fi Direct" else "Bluetooth"
+                            onEvent(Event.Status("Connected to ${connected.name} via $transport.", true))
                         }
                         connection.read(attempt)
                     }
@@ -108,6 +146,7 @@ internal class BitchatLink(
                     socket = null
                     active = null
                     onEvent(Event.Offer(null))
+                    onEvent(Event.Verify(null))
                 }
             }
         }
@@ -116,11 +155,40 @@ internal class BitchatLink(
     fun close() {
         generation++
         session?.cancel()
+        confirmation?.cancel()
+        confirmation = null
         runCatching { server?.close() }
         runCatching { socket?.close() }
         active = null
         onEvent(Event.Offer(null))
+        onEvent(Event.Verify(null))
         onEvent(Event.Status("Disconnected."))
+    }
+
+    fun verifyPeer(approved: Boolean) {
+        confirmation?.complete(approved)
+        onEvent(Event.Verify(null))
+    }
+
+    private suspend fun verifyWifi(input: DataInputStream, output: DataOutputStream, attempt: Int) {
+        val local = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val remote = ByteArray(16)
+        output.write(local)
+        output.flush()
+        input.readFully(remote)
+        val combined = ByteArray(16) { (local[it].toInt() xor remote[it].toInt()).toByte() }
+        val number = java.nio.ByteBuffer.wrap(MessageDigest.getInstance("SHA-256").digest(combined)).int
+        val code = Math.floorMod(number, 1_000_000).toString().padStart(6, '0')
+        val verified = CompletableDeferred<Boolean>()
+        withContext(Dispatchers.Main) {
+            if (generation != attempt) throw CancellationException()
+            confirmation = verified
+            onEvent(Event.Verify(code))
+        }
+        val approved = verified.await()
+        output.writeBoolean(approved)
+        output.flush()
+        require(approved && input.readBoolean()) { "The peer was not confirmed." }
     }
 
     suspend fun message(text: String) {
@@ -134,7 +202,8 @@ internal class BitchatLink(
         val connection = requireConnection()
         val details = withContext(Dispatchers.IO) {
             val size = file.length()
-            require(size in 1..MAX_BYTES) { "Choose a file up to 32 MB." }
+            require(size > 0) { "The selected file is empty." }
+            require(size <= connection.limit) { "Use Wi-Fi Direct for files of 32 MB or more." }
             FileOffer(file.name, size, digest(file), credit.take(800))
         }
         require(connection.outgoing == null) { "Wait for the current transfer to finish." }
@@ -156,6 +225,10 @@ internal class BitchatLink(
     suspend fun decide(accept: Boolean) {
         val connection = requireConnection()
         val offer = connection.incoming ?: return
+        if (accept && offer.size > directory.usableSpace) {
+            decide(false)
+            throw IOException("There is not enough free space for this file.")
+        }
         connection.accepted = if (accept) offer else null
         connection.incoming = null
         onEvent(Event.Offer(null))
@@ -167,7 +240,8 @@ internal class BitchatLink(
 
     private inner class Connection(
         private val input: DataInputStream,
-        private val output: DataOutputStream
+        private val output: DataOutputStream,
+        val limit: Long
     ) {
         private val writeLock = Mutex()
         @Volatile var incoming: FileOffer? = null
@@ -197,7 +271,7 @@ internal class BitchatLink(
                         val size = input.readLong()
                         val digest = ByteArray(32).also { input.readFully(it) }
                         val credit = input.readUTF()
-                        require(size in 1..MAX_BYTES && name.length in 1..160 && credit.length <= 800)
+                        require(size in 1..limit && name.length in 1..160 && credit.length <= 800)
                         incoming = FileOffer(name, size, digest, credit)
                         emit(attempt, Event.Offer(incoming))
                     }
@@ -210,14 +284,7 @@ internal class BitchatLink(
                             try {
                                 send(DATA) {
                                     file.inputStream().use { source ->
-                                        val buffer = ByteArray(64 * 1024)
-                                        var remaining = details.size
-                                        while (remaining > 0) {
-                                            val count = source.read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
-                                            if (count == -1) throw IOException("File changed during transfer.")
-                                            write(buffer, 0, count)
-                                            remaining -= count
-                                        }
+                                        TransferBlocks.send(source, this, details.size)
                                     }
                                 }
                             } catch (e: CancellationException) {
@@ -255,19 +322,8 @@ internal class BitchatLink(
             val output = File(directory, "${UUID.randomUUID().toString().take(8)}-$name")
             val partial = File(directory, "${output.name}.part")
             try {
-                val checksum = MessageDigest.getInstance("SHA-256")
-                partial.outputStream().use { target ->
-                    val buffer = ByteArray(64 * 1024)
-                    var remaining = details.size
-                    while (remaining > 0) {
-                        val count = minOf(remaining, buffer.size.toLong()).toInt()
-                        input.readFully(buffer, 0, count)
-                        target.write(buffer, 0, count)
-                        checksum.update(buffer, 0, count)
-                        remaining -= count
-                    }
-                }
-                require(MessageDigest.isEqual(checksum.digest(), details.digest)) { "File verification failed." }
+                val checksum = partial.outputStream().use { TransferBlocks.receive(input, it, details.size) }
+                require(MessageDigest.isEqual(checksum, details.digest)) { "File verification failed." }
                 if (details.credit.isNotBlank()) File(directory, "${output.name}.credit.txt").writeText(details.credit)
                 if (!partial.renameTo(output)) throw IOException("Couldn't save the received file.")
                 return output
@@ -289,7 +345,6 @@ internal class BitchatLink(
         private const val DECLINE = 4
         private const val DATA = 5
         private const val DELIVERED = 6
-        private const val MAX_BYTES = 32_000_000L
 
         private fun digest(file: File): ByteArray {
             val hash = MessageDigest.getInstance("SHA-256")

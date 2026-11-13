@@ -24,8 +24,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10000006
-        versionName = "1.0.0.6"
+        versionCode = 10000007
+        versionName = "1.0.0.7"
 
         // Phones only: drops the x86 copies of the native libraries (about half the APK size).
         ndk {
@@ -45,7 +45,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            resValue("string", "app_name", "Beyond Debug")
+        }
         release {
+            resValue("string", "app_name", "Beyond")
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
@@ -72,6 +78,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":liveclips"))
     val cameraxVersion = "1.6.2"
 
     implementation("androidx.core:core-ktx:1.15.0")

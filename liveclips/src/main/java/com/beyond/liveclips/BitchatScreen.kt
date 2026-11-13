@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.net.wifi.p2p.WifiP2pDevice
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +54,8 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
     var file by remember(clip) { mutableStateOf(clip) }
     var received by remember { mutableStateOf(receivedFiles(store.received)) }
     var sending by remember { mutableStateOf(false) }
+    var verificationCode by remember { mutableStateOf<String?>(null) }
+    var wifiPeers by remember { mutableStateOf(emptyList<WifiP2pDevice>()) }
     val link = remember {
         BitchatLink(context.applicationContext, scope, store.received) { event ->
             when (event) {
@@ -65,6 +68,7 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
                     messages = (messages + "$author: ${event.text}").takeLast(30)
                 }
                 is BitchatLink.Event.Offer -> offer = event.offer
+                is BitchatLink.Event.Verify -> verificationCode = event.code
                 is BitchatLink.Event.Received -> {
                     received = receivedFiles(store.received)
                     status = "Received ${event.file.name}."
@@ -72,8 +76,18 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
             }
         }
     }
-    DisposableEffect(link) {
-        onDispose { link.close() }
+    val wifi = remember {
+        lateinit var direct: WifiDirect
+        direct = WifiDirect(context, { wifiPeers = it }, { info ->
+            link.connectWifi("the nearby device") { direct.open(info) }
+        }, { status = it })
+        direct
+    }
+    DisposableEffect(link, wifi) {
+        onDispose {
+            link.close()
+            wifi.close()
+        }
     }
 
     fun refresh() {
@@ -89,6 +103,29 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
     val bluetoothSettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (permitted()) refresh()
     }
+    val wifiPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES
+        else Manifest.permission.ACCESS_FINE_LOCATION
+    var wifiTarget by remember { mutableStateOf<WifiP2pDevice?>(null) }
+    val requestWifi = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        val granted = grants[wifiPermission] == true
+        if (granted) {
+            val target = wifiTarget
+            if (target == null) wifi.discover() else wifi.connect(target)
+        } else status = "Allow nearby access to use Wi-Fi Direct."
+        wifiTarget = null
+    }
+    fun openWifi(device: WifiP2pDevice?) {
+        status = if (device == null) "Looking for devices. Open Wi-Fi Direct on both phones." else "Connecting over Wi-Fi Direct…"
+        if (!wifi.supported) {
+            status = "Wi-Fi Direct is unavailable on this device."
+        } else if (ContextCompat.checkSelfPermission(context, wifiPermission) != PackageManager.PERMISSION_GRANTED) {
+            wifiTarget = device
+            requestWifi.launch(
+                if (Build.VERSION.SDK_INT >= 33) arrayOf(wifiPermission)
+                else arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, wifiPermission)
+            )
+        } else if (device == null) wifi.discover() else wifi.connect(device)
+    }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && !sending) {
             sending = true
@@ -102,7 +139,7 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
                             ?.replace(Regex("[^a-zA-Z0-9._ -]"), "_")?.take(100) ?: "Shared file"
                         check(temporary.mkdir())
                         File(temporary, name.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "file").also {
-                            copyFromUri(context, uri, it, 32_000_000L)
+                            copyFromUri(context, uri, it, Long.MAX_VALUE)
                         }
                     }
                     file = imported
@@ -131,13 +168,16 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
         }
     }
 
-    Text("Pair two phones in Android Bluetooth settings. On one phone tap Listen. On the other select the paired phone.")
+    Text("Use Bluetooth for files under 32 MB, or Wi-Fi Direct for any file size.")
     if (status.isNotBlank()) Text(status)
-    if (link.adapter == null) {
-        Text("Bluetooth is unavailable on this device.")
-        return
+    verificationCode?.let { code ->
+        Text("Confirm this code matches the other phone: $code")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(onClick = { link.verifyPeer(true) }) { Text("Code matches") }
+            OutlinedButton(onClick = { link.verifyPeer(false) }) { Text("Decline") }
+        }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    if (link.adapter != null) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedButton(onClick = {
             if (permitted()) bluetoothSettings.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
             else request.launch(Manifest.permission.BLUETOOTH_CONNECT)
@@ -146,19 +186,29 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
             if (permitted()) refresh() else request.launch(Manifest.permission.BLUETOOTH_CONNECT)
         }) { Text("Refresh") }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    if (link.adapter != null) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Button(enabled = !connected, onClick = {
             if (!permitted()) request.launch(Manifest.permission.BLUETOOTH_CONNECT)
             else if (link.adapter.isEnabled) link.listen()
             else bluetoothSettings.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         }) { Text("Listen") }
-        OutlinedButton(onClick = { link.close() }) { Text("Disconnect") }
     }
     if (!connected) paired.forEach { device ->
         TextButton(onClick = { action { link.connect(device) } }) {
             Text("Connect to ${runCatching { device.name }.getOrNull() ?: device.address}")
         }
     }
+    if (wifi.supported) {
+        OutlinedButton(onClick = { openWifi(null) }) { Text("Find Wi-Fi Direct devices") }
+        wifiPeers.forEach { device ->
+            TextButton(onClick = { openWifi(device) }) {
+                Text("Wi-Fi Direct · ${device.deviceName.ifBlank { device.deviceAddress }}")
+            }
+        }
+    }
+    if (link.adapter != null || wifi.supported) {
+        TextButton(onClick = { link.close(); wifi.close(); wifiPeers = emptyList() }) { Text("Disconnect") }
+    } else Text("Nearby sharing is unavailable on this device.")
     if (connected) {
         messages.forEach { Text(it) }
         OutlinedTextField(
@@ -172,10 +222,16 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
             message = ""
             action { link.message(text) }
         }) { Text("Send message") }
+    }
+    if (link.adapter != null || wifi.supported) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedButton(enabled = !sending, onClick = { pick.launch(arrayOf("*/*")) }) { Text("Choose file") }
-            Button(enabled = file != null && !sending, onClick = {
+            Button(enabled = file != null && !sending && (connected || wifi.supported), onClick = {
                 val chosen = file ?: return@Button
+                if ((!connected || chosen.length() >= BLUETOOTH_LIMIT) && !link.wifiConnected) {
+                    openWifi(null)
+                    return@Button
+                }
                 sending = true
                 action {
                     try {
@@ -186,10 +242,16 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
                         sending = false
                     }
                 }
-            }) { Text("Offer file") }
+            }) {
+                val useWifi = !link.wifiConnected && (!connected || (file?.length() ?: 0) >= BLUETOOTH_LIMIT)
+                Text(if (useWifi) "Connect by Wi-Fi" else "Offer file")
+            }
         }
     }
-    file?.let { Text("Selected file: ${it.name}") }
+    file?.let {
+        Text("Selected file: ${it.name}")
+        if (it.length() >= BLUETOOTH_LIMIT) Text("This file uses Wi-Fi Direct.")
+    }
     offer?.let { incoming ->
         HorizontalDivider()
         Text("Incoming file: ${incoming.name} · ${incoming.size / 1024} KB")
