@@ -95,13 +95,12 @@ import com.beyond.camera.settings.HoldShutterAction
 import com.beyond.camera.settings.VideoResolution
 import com.beyond.camera.settings.VolumeKeyAction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -181,7 +180,7 @@ fun CameraScreen(
     var showPanel by remember { mutableStateOf(false) }
     var operationBusy by remember { mutableStateOf(false) }
     var inFlight by remember { mutableIntStateOf(0) }
-    val nightLock = remember { Mutex() }
+    var capturing by remember { mutableStateOf(false) }
     var nightCapturing by remember { mutableStateOf(false) }
     var captureOrder by remember { mutableLongStateOf(0L) }
     var lastPhotoOrder by remember { mutableLongStateOf(0L) }
@@ -270,7 +269,7 @@ fun CameraScreen(
     val wide = ratio == AspectRatioOption.R9_16 || ratio == AspectRatioOption.FULL
 
     LaunchedEffect(
-        mode, front, wide, settings.videoResolution, settings.hdr, settings.pictureQuality, settings.scanQrInPhoto
+        mode, front, wide, settings.videoResolution, settings.pictureQuality, settings.scanQrInPhoto
     ) {
         torch = false
         engine.bind(
@@ -281,7 +280,6 @@ fun CameraScreen(
                 front = front,
                 wide = wide,
                 jpegQuality = settings.pictureQuality.jpeg,
-                hdr = settings.hdr,
                 videoRes = settings.videoResolution,
                 scanInPhoto = settings.scanQrInPhoto
             ),
@@ -317,7 +315,7 @@ fun CameraScreen(
 
     // ---- Actions -------------------------------------------------------------------------------
     suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
-        if (!engine.photoReady) return false
+        if (!engine.photoReady || capturing || operationBusy) return false
         if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
         flashTick = System.nanoTime()
 
@@ -345,8 +343,18 @@ fun CameraScreen(
             ).takeIf { it.needed }
         }
 
-        suspend fun captureAndSave(mergeNight: Boolean): Boolean {
-            val frame = engine.capture()
+        val mergeNight = night && !originalOnly
+        capturing = true
+        nightCapturing = mergeNight
+        inFlight++
+        try {
+            val frame = try {
+                engine.capture()
+            } finally {
+                // Once CameraX has delivered the JPEG, the next tap can start a new shot.
+                // Keep the shutter busy across all three frames of a Night shot.
+                if (!mergeNight) capturing = false
+            }
             val (uri, location) = withContext(Dispatchers.IO) {
                 val location = if (saveLocation) LocationHelper.lastKnown(app) else null
                 PhotoProcessor.saveOriginal(app, frame, location) to location
@@ -383,37 +391,24 @@ fun CameraScreen(
                 if (!queued) extraFrames.forEach { it.delete() }
             }
             return true
-        }
-
-        inFlight++
-        try {
-            // Keep the three frames of each Night shot together, including during a held burst.
-            return if (night) {
-                nightLock.withLock {
-                    nightCapturing = !originalOnly
-                    try {
-                        captureAndSave(!originalOnly)
-                    } finally {
-                        nightCapturing = false
-                    }
-                }
-            } else {
-                captureAndSave(false)
-            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             app.toast("Couldn't take the photo")
             return false
         } finally {
+            if (mergeNight) {
+                capturing = false
+                nightCapturing = false
+            }
             inFlight--
         }
     }
 
     fun shoot(delaySeconds: Int) {
-        if (!engine.photoReady) return
+        if (!engine.photoReady || capturing || operationBusy) return
         if (delaySeconds == 0) {
-            scope.launch { capturePhoto() }
+            scope.launch(start = CoroutineStart.UNDISPATCHED) { capturePhoto() }
             return
         }
         countJob?.cancel()
@@ -523,12 +518,12 @@ fun CameraScreen(
             }
 
             HoldShutterAction.BURST -> {
-                if (!engine.photoReady || burstJob?.isActive == true) return
+                if (!engine.photoReady || capturing || burstJob?.isActive == true) return
                 countJob?.cancel()
                 countdown = null
                 app.buzz()
                 live.burstHeld = true
-                burstJob = scope.launch {
+                burstJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                     try {
                         while (live.burstHeld && burstCount < 300) {
                             if (!capturePhoto(originalOnly = true)) break
@@ -791,6 +786,7 @@ fun CameraScreen(
                         spinning = nightCapturing,
                         burstCount = burstCount,
                         enabled = if (photoMode) engine.photoReady else engine.bound && !operationBusy,
+                        busy = photoMode && capturing && !live.burstHeld,
                         onTap = { onShutterTap() },
                         onLongPress = { onShutterHold() },
                         onRelease = { onShutterRelease() }

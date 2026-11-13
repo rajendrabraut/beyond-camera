@@ -196,6 +196,7 @@ fun ShutterButton(
     spinning: Boolean,
     burstCount: Int,
     enabled: Boolean,
+    busy: Boolean,
     onTap: () -> Unit,
     onLongPress: (() -> Unit)?,
     onRelease: () -> Unit
@@ -219,7 +220,7 @@ fun ShutterButton(
     Box(
         modifier = Modifier
             .size(82.dp)
-            .alpha(if (enabled) 1f else 0.45f)
+            .alpha(if (enabled && !busy) 1f else 0.45f)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(

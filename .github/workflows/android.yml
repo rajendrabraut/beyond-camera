@@ -1,7 +1,7 @@
 name: Android build
 
 # Builds debug + release APKs on every push / pull request to main and on demand.
-# Pushing a tag like v1.0.0.4 also publishes a GitHub Release with both APKs.
+# Pushing a version tag publishes only the release-signed APK to GitHub Releases.
 #
 # Release signing uses these repository secrets (Settings > Secrets and variables > Actions):
 #   BC_KEYSTORE_B64      base64 of the release .jks file
@@ -113,6 +113,7 @@ jobs:
 
       - name: Verify signatures and version
         run: |
+          set -o pipefail
           bt="$ANDROID_HOME/build-tools/36.0.0"
           for apk in dist/*.apk; do
             echo "== $apk"
@@ -123,6 +124,13 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Verify the published signing certificate
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -o pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs dist/*-release.apk \
+            | grep -Fx "Signer #1 certificate SHA-256 digest: 0a5b103d5a618cdcc640ecc66055cc3c378e326da4c1742341fe51972b04c526"
 
       - name: Upload APKs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -149,7 +157,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.apk \
+          gh release create "$GITHUB_REF_NAME" dist/*-release.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "Beyond Camera ${{ needs.build.outputs.version }}" \
             --generate-notes \
