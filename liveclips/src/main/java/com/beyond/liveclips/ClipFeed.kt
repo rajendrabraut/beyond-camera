@@ -70,20 +70,31 @@ internal fun ClipFeed(
     clips: List<File>,
     selected: File?,
     store: ClipStore,
+    creators: ClipCreators,
     status: String,
     onCreate: () -> Unit,
     onSelect: (File) -> Unit,
     onShare: (File) -> Unit,
     onNearby: (File) -> Unit,
+    onStream: (File) -> Unit,
     onGallery: (File) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val reactions = remember { ClipReactions(context) }
-    var savedOnly by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf(FeedFilter.FOR_YOU) }
     var revision by remember { mutableStateOf(0) }
-    val visible = remember(clips, savedOnly, revision) {
-        if (savedOnly) clips.filter(reactions::saved) else clips
+    var profileFor by remember { mutableStateOf<ClipCreator?>(null) }
+    val visible = remember(clips, filter, revision, profileFor) {
+        when (filter) {
+            FeedFilter.FOR_YOU -> clips.sortedWith(
+                compareByDescending<File> { creators.creator(it)?.let(creators::follows) == true }
+                    .thenByDescending { it.lastModified() }
+            )
+            FeedFilter.FOLLOWING -> clips.filter { creators.creator(it)?.let(creators::follows) == true }
+            FeedFilter.SAVED -> clips.filter(reactions::saved)
+            FeedFilter.PROFILE -> clips.filter { creators.creator(it)?.id == profileFor?.id }
+        }
     }
     val pager = rememberPagerState(
         initialPage = visible.indexOf(selected).coerceAtLeast(0),
@@ -93,6 +104,7 @@ internal fun ClipFeed(
     var commentFor by remember { mutableStateOf<File?>(null) }
     var moreFor by remember { mutableStateOf<File?>(null) }
     var paused by remember { mutableStateOf(false) }
+    var editProfile by remember { mutableStateOf(false) }
     val active = visible.getOrNull(pager.settledPage)
 
     DisposableEffect(player) { onDispose { player.release() } }
@@ -137,7 +149,14 @@ internal fun ClipFeed(
                 Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter)
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.77f))))) {
                     Column(Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 100.dp, bottom = 20.dp, top = 36.dp)) {
-                        Text("My clip ${clips.size - clips.indexOf(file)}", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                        val creator = remember(file, revision) { creators.creator(file) }
+                        if (creator != null) {
+                            Text(creator.name, Modifier.clickable {
+                                pager.requestScrollToPage(0)
+                                profileFor = creator
+                                filter = FeedFilter.PROFILE
+                            }, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                        } else Text("Nearby clip", color = Color.White)
                         if (credit.isNotBlank()) Text(credit.substringBefore(" · "), color = Color.White, style = MaterialTheme.typography.bodySmall)
                     }
                     Column(Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -158,19 +177,36 @@ internal fun ClipFeed(
         if (visible.isEmpty()) {
             Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(if (savedOnly) "No saved clips yet" else "Your exported clips appear here", color = Color.White)
-                if (!savedOnly) Button(onClick = onCreate) { Text("Create a clip") }
+                Text(when (filter) {
+                    FeedFilter.FOLLOWING -> "Clips from creators you follow appear here."
+                    FeedFilter.SAVED -> "No saved clips yet."
+                    FeedFilter.PROFILE -> "No clips from this profile yet."
+                    FeedFilter.FOR_YOU -> "Export a clip or receive one nearby."
+                }, color = Color.White)
+                if (filter == FeedFilter.FOR_YOU) Button(onClick = onCreate) { Text("Create a clip") }
             }
         }
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.75f), Color.Transparent))),
             horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { if (savedOnly) { pager.requestScrollToPage(0); savedOnly = false } }) {
-                    Text(if (!savedOnly) "• My Clips" else "My Clips")
+            Row {
+                listOf(FeedFilter.FOR_YOU, FeedFilter.FOLLOWING, FeedFilter.SAVED).forEach { option ->
+                    TextButton(onClick = {
+                        if (filter != option) {
+                            pager.requestScrollToPage(0)
+                            filter = option
+                        }
+                    }) { Text(option.label, color = if (filter == option) Color.White else Color.LightGray) }
                 }
-                TextButton(onClick = { if (!savedOnly) { pager.requestScrollToPage(0); savedOnly = true } }) {
-                    Text(if (savedOnly) "• Saved" else "Saved")
+            }
+            Row {
+                TextButton(onClick = { editProfile = true }) { Text("My profile") }
+                val creator = profileFor
+                if (filter == FeedFilter.PROFILE && creator != null && creator.id != creators.own.id) {
+                    val followed = remember(creator, revision) { creators.follows(creator) }
+                    TextButton(onClick = { creators.follow(creator, !followed); revision++ }) {
+                        Text(if (followed) "Unfollow ${creator.name}" else "Follow ${creator.name}")
+                    }
                 }
             }
             if (status.isNotBlank()) Text(status, Modifier.padding(horizontal = 16.dp), color = Color.White)
@@ -206,6 +242,7 @@ internal fun ClipFeed(
                 Column {
                     TextButton(onClick = { moreFor = null; onShare(file) }) { Text("Share via Android") }
                     TextButton(onClick = { moreFor = null; onNearby(file) }) { Text("Send nearby") }
+                    TextButton(onClick = { moreFor = null; onStream(file) }) { Text("Stream from this phone") }
                     if (android.os.Build.VERSION.SDK_INT >= 29) {
                         TextButton(onClick = { moreFor = null; onGallery(file) }) { Text("Save to gallery") }
                     }
@@ -214,4 +251,22 @@ internal fun ClipFeed(
             confirmButton = { TextButton(onClick = { moreFor = null }) { Text("Close") } }
         )
     }
+    if (editProfile) {
+        var name by remember { mutableStateOf(creators.own.name) }
+        AlertDialog(
+            onDismissRequest = { editProfile = false },
+            title = { Text("My profile") },
+            text = { OutlinedTextField(name, { if (it.length <= 40) name = it }, label = { Text("Display name") }) },
+            confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = {
+                creators.rename(name)
+                revision++
+                editProfile = false
+            }) { Text("Save profile") } },
+            dismissButton = { TextButton(onClick = { editProfile = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+private enum class FeedFilter(val label: String) {
+    FOR_YOU("For You"), FOLLOWING("Following"), SAVED("Saved"), PROFILE("Profile")
 }

@@ -124,8 +124,8 @@ alongside the release under the separate `com.beyond.camera.debug` package.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.9`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.9` = `10000009`).
+Four-part versions `a.b.c.d` (current: `1.0.0.10`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.10` = `10000010`).
 
 ## Tech stack
 
