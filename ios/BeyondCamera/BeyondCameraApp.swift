@@ -1,6 +1,7 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 @main
 struct BeyondCameraApp: App {
@@ -13,6 +14,8 @@ private struct CameraScreen: View {
     @StateObject private var camera = CameraController()
     @Environment(\.scenePhase) private var phase
     @State private var video = false
+    @State private var chooseFolder = false
+    @State private var showDestination = false
 
     var body: some View {
         ZStack {
@@ -26,6 +29,15 @@ private struct CameraScreen: View {
                             .foregroundStyle(.red)
                     }
                     Spacer()
+                    Button {
+                        showDestination = true
+                    } label: {
+                        Image(systemName: "folder").font(.title2)
+                            .frame(width: 50, height: 50)
+                            .background(.black.opacity(0.52), in: Circle())
+                    }
+                    .accessibilityLabel("Save destination")
+                    .disabled(camera.recording || camera.transitioning)
                     Button {
                         camera.switchCamera()
                     } label: {
@@ -78,6 +90,13 @@ private struct CameraScreen: View {
         }
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
+        .confirmationDialog("Save destination", isPresented: $showDestination, titleVisibility: .visible) {
+            Button("Use Photos") { camera.setFolder(nil) }
+            Button("Choose Files folder") { chooseFolder = true }
+        }
+        .fileImporter(isPresented: $chooseFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let folder) = result { camera.setFolder(folder) }
+        }
         .task { if phase == .active { camera.activate() } }
         .onChange(of: phase) { state in
             if state == .active { camera.activate() }

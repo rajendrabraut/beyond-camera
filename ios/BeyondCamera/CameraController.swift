@@ -12,6 +12,8 @@ final class CameraController: NSObject, ObservableObject {
 
     let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "com.beyond.camera.capture", qos: .userInitiated)
+    private let storage = DispatchQueue(label: "com.beyond.camera.storage", qos: .utility)
+    private let folderKey = "capture-folder-bookmark"
     private let photos = AVCapturePhotoOutput()
     private let movies = AVCaptureMovieFileOutput()
     private var videoInput: AVCaptureDeviceInput?
@@ -75,6 +77,58 @@ final class CameraController: NSObject, ObservableObject {
             }
             self.session.commitConfiguration()
         }
+    }
+
+    func setFolder(_ folder: URL?) {
+        guard let folder else {
+            UserDefaults.standard.removeObject(forKey: folderKey)
+            message("Saving to Photos")
+            return
+        }
+        guard folder.startAccessingSecurityScopedResource() else {
+            message("Could not access the selected folder.")
+            return
+        }
+        defer { folder.stopAccessingSecurityScopedResource() }
+        do {
+            let bookmark = try folder.bookmarkData(options: .minimalBookmark)
+            UserDefaults.standard.set(bookmark, forKey: folderKey)
+            message("Saving to \(folder.lastPathComponent)")
+        } catch {
+            message("Could not remember the selected folder.")
+        }
+    }
+
+    private func saveToSelectedFolder(_ name: String, writer: @escaping (URL) throws -> Void,
+                                      completion: @escaping (Bool) -> Void = { _ in }) -> Bool {
+        guard let bookmark = UserDefaults.standard.data(forKey: folderKey) else { return false }
+        storage.async {
+            do {
+                var stale = false
+                let folder = try URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale)
+                guard !stale, folder.startAccessingSecurityScopedResource() else {
+                    self.message("Choose the save folder again to restore access.")
+                    completion(false)
+                    return
+                }
+                defer { folder.stopAccessingSecurityScopedResource() }
+                let coordinator = NSFileCoordinator()
+                var coordinationError: NSError?
+                var writeError: Error?
+                coordinator.coordinate(writingItemAt: folder.appendingPathComponent(name), options: [],
+                                       error: &coordinationError) { destination in
+                    do { try writer(destination) } catch { writeError = error }
+                }
+                if let error = coordinationError { throw error }
+                if let error = writeError { throw error }
+                self.message("Saved to \(folder.lastPathComponent)")
+                completion(true)
+            } catch {
+                self.message("Could not save to the selected folder.")
+                completion(false)
+            }
+        }
+        return true
     }
 
     func takePhoto() {
@@ -250,7 +304,11 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         }
         queue.async {
             let options = PHAssetResourceCreationOptions()
-            options.originalFilename = self.photoNames[photo.resolvedSettings.uniqueID]
+            let name = self.photoNames[photo.resolvedSettings.uniqueID]
+            if let name, self.saveToSelectedFolder(name, writer: { try data.write(to: $0, options: [.withoutOverwriting]) }) {
+                return
+            }
+            options.originalFilename = name
             self.save {
                 PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: options)
             }
@@ -285,6 +343,11 @@ extension CameraController: AVCaptureFileOutputRecordingDelegate {
             message("Could not finish recording.")
             return
         }
+        if saveToSelectedFolder(fileURL.lastPathComponent, writer: {
+            try FileManager.default.copyItem(at: fileURL, to: $0)
+        }, completion: { saved in
+            if saved { try? FileManager.default.removeItem(at: fileURL) }
+        }) { return }
         save({
             PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: fileURL, options: nil)
         }, completion: { saved in
