@@ -84,6 +84,7 @@ import com.beyond.camera.camera.CameraMode
 import com.beyond.camera.engine.EngineTuning
 import com.beyond.camera.engine.ProcessingQueue
 import com.beyond.camera.camera.PhotoProcessor
+import com.beyond.camera.diagnostics.CaptureDiagnostics
 import com.beyond.camera.camera.ProState
 import com.beyond.camera.camera.TimelapseRecorder
 import com.beyond.camera.qr.QrDecoder
@@ -314,6 +315,7 @@ fun CameraScreen(
     // ---- Actions -------------------------------------------------------------------------------
     suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
         if (!engine.photoReady || operationBusy) return false
+        val captureStarted = SystemClock.elapsedRealtime()
         val instant = mode == CameraMode.PHOTO && flash == FlashSetting.OFF
         val snapshot = if (instant) engine.photoSnapshot() else null
         val still = snapshot == null
@@ -365,7 +367,12 @@ fun CameraScreen(
             }
             val (uri, location) = withContext(Dispatchers.IO) {
                 val location = if (saveLocation) LocationHelper.lastKnown(app) else null
-                PhotoProcessor.saveOriginal(app, frame, location) to location
+                val uri = PhotoProcessor.saveOriginal(app, frame, location)
+                if (uri != null) {
+                    CaptureDiagnostics.photo(app, frame.jpeg, frame.rotation, mode.name,
+                        SystemClock.elapsedRealtime() - captureStarted, snapshot?.ageMs, snapshot?.earlier == true)
+                }
+                uri to location
             }
             if (uri == null) {
                 app.toast("Couldn't save the photo")
@@ -434,6 +441,7 @@ fun CameraScreen(
     fun toggleVideo() {
         val current = live.recording
         if (current != null) {
+            CaptureDiagnostics.video(app, "${mode.name} / stop requested", recordedMs)
             current.stop()
             return
         }
@@ -445,6 +453,7 @@ fun CameraScreen(
         if (settings.shutterSound) runCatching { sound.play(MediaActionSound.START_VIDEO_RECORDING) }
         val started = engine.startRecording(withAudio, location) { event ->
             when (event) {
+                is VideoRecordEvent.Start -> CaptureDiagnostics.video(app, "${mode.name} / recording started", 0)
                 is VideoRecordEvent.Status -> {
                     recordedMs = TimeUnit.NANOSECONDS.toMillis(event.recordingStats.recordedDurationNanos)
                     if (modeState.value == CameraMode.CLIP && recordedMs >= settings.shortVideoSeconds * 1000L) {
@@ -453,6 +462,9 @@ fun CameraScreen(
                 }
 
                 is VideoRecordEvent.Finalize -> {
+                    val result = if (event.hasError()) "error ${event.error}" else "saved"
+                    CaptureDiagnostics.video(app, "${mode.name} / $result",
+                        TimeUnit.NANOSECONDS.toMillis(event.recordingStats.recordedDurationNanos))
                     live.recording = null
                     isRecording = false
                     if (settings.shutterSound) runCatching { sound.play(MediaActionSound.STOP_VIDEO_RECORDING) }
@@ -465,6 +477,7 @@ fun CameraScreen(
             }
         }
         live.recording = started
+        if (started == null) CaptureDiagnostics.video(app, "${mode.name} / start failed", 0)
         isRecording = started != null
     }
 
@@ -476,6 +489,7 @@ fun CameraScreen(
             scope.launch {
                 val uri = withContext(Dispatchers.IO) { running.finish() }
                 operationBusy = false
+                    CaptureDiagnostics.video(app, if (uri != null) "Time-lapse / saved" else "Time-lapse / save failed", 0)
                 if (uri != null) last = MediaItem(uri, true) else app.toast("Too short: keep recording a little longer")
             }
         } else if (engine.bound && !operationBusy) {
@@ -486,6 +500,7 @@ fun CameraScreen(
                 }
             )
             isRecording = true
+            CaptureDiagnostics.video(app, "Time-lapse / recording started", 0)
         }
     }
 

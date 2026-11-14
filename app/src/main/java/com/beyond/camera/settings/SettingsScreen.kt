@@ -48,6 +48,7 @@ import com.beyond.camera.Ui
 import com.beyond.camera.appSettings
 import com.beyond.camera.hasPermission
 import com.beyond.camera.toast
+import com.beyond.camera.diagnostics.CaptureDiagnostics
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
@@ -105,6 +106,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     s.enhancedZoom
                 ) { s.enhancedZoom = it }
             }
+
+            CaptureDiagnostics.Settings()
 
             Group("Controls") {
                 ChoiceRow("Volume buttons", VolumeKeyAction.entries, s.volumeKeys, { it.label }) { s.volumeKeys = it }
