@@ -75,6 +75,8 @@ internal class PhoneStream(private val file: File, private val server: SSLServer
             Thread({
                 try {
                     socket.use { serve(it) }
+                } catch (error: javax.net.ssl.SSLException) {
+                    android.util.Log.d("BeyondStream", "Viewer TLS handshake failed", error)
                 } catch (_: IOException) {
                     // The player may disconnect or seek while a response is in progress.
                 } finally {
@@ -146,7 +148,7 @@ internal class PhoneStream(private val file: File, private val server: SSLServer
     }
 
     companion object {
-        private const val ALIAS = "beyond_phone_stream"
+        private const val ALIAS = "beyond_phone_stream_ec"
 
         fun start(file: File, advertisedHost: String, port: Int): PhoneStream {
             require(file.isFile && file.length() > 0) { "Select an exported clip." }
@@ -155,11 +157,10 @@ internal class PhoneStream(private val file: File, private val server: SSLServer
             require(validated.host != null && port in 1024..65535) { "Enter a host name or IP address and a valid port." }
             val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             if (!keys.containsAlias(ALIAS)) {
-                KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore").apply {
+                KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply {
                     initialize(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN)
-                        .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
-                        .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PSS, KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-                        .setKeySize(2048)
+                        .setDigests(KeyProperties.DIGEST_NONE, KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384, KeyProperties.DIGEST_SHA512)
+                        .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
                         .build())
                 }.generateKeyPair()
             }
@@ -167,7 +168,7 @@ internal class PhoneStream(private val file: File, private val server: SSLServer
             val key = keys.getKey(ALIAS, null) as PrivateKey
             val manager = object : X509ExtendedKeyManager() {
                 override fun getServerAliases(type: String?, issuers: Array<out Principal>?) =
-                    if (type == "RSA" || type == "RSASSA-PSS") arrayOf(ALIAS) else null
+                    if (type == "EC") arrayOf(ALIAS) else null
                 override fun chooseServerAlias(type: String?, issuers: Array<out Principal>?, socket: Socket?) =
                     getServerAliases(type, issuers)?.first()
                 override fun chooseEngineServerAlias(type: String?, issuers: Array<out Principal>?, engine: javax.net.ssl.SSLEngine?) =
