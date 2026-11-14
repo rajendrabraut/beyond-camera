@@ -3,20 +3,23 @@ package com.beyond.camera.camera
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
-import android.os.SystemClock
 import androidx.camera.core.ImageProxy
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
 /** Retains the latest camera frame independently of still capture, JPEG encoding and disk I/O. */
 internal class PhotoFrames {
-    @Volatile private var newest: Snapshot? = null
+    private val lock = Any()
+    private var staging = ByteArray(0)
+    private var newest: Snapshot? = null
 
     fun update(image: ImageProxy) {
         val width = image.width
         val height = image.height
         if (width % 2 != 0 || height % 2 != 0) return
-        val pixels = ByteArray(width * height * 3 / 2)
+        val byteCount = width * height * 3 / 2
+        if (staging.size != byteCount) staging = ByteArray(byteCount)
+        val pixels = staging
         val y = image.planes[0]
         val yBuffer = y.buffer.duplicate()
         repeat(height) { row ->
@@ -43,10 +46,13 @@ internal class PhotoFrames {
             copyChroma(vBuffer, v.rowStride, v.pixelStride, width, height, pixels, 0)
             copyChroma(u.buffer, u.rowStride, u.pixelStride, width, height, pixels, 1)
         }
-        newest = Snapshot(pixels, width, height, image.imageInfo.rotationDegrees, SystemClock.elapsedRealtime())
+        synchronized(lock) {
+            staging = newest?.pixels ?: ByteArray(byteCount)
+            newest = Snapshot(pixels, width, height, image.imageInfo.rotationDegrees)
+        }
     }
 
-    fun snapshot(): Snapshot? = newest?.takeIf { SystemClock.elapsedRealtime() - it.receivedAt <= 300 }
+    fun snapshot(): Snapshot? = synchronized(lock) { newest?.freeze() }
 
     private fun copyChroma(
         source: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int,
@@ -62,12 +68,13 @@ internal class PhotoFrames {
     }
 
     class Snapshot(
-        private val pixels: ByteArray,
+        internal val pixels: ByteArray,
         private val width: Int,
         private val height: Int,
-        private val rotation: Int,
-        val receivedAt: Long
+        private val rotation: Int
     ) {
+        fun freeze() = Snapshot(pixels.copyOf(), width, height, rotation)
+
         fun encode(quality: Int): Frame {
             val buffer = ByteArrayOutputStream()
             val image = YuvImage(pixels, ImageFormat.NV21, width, height, null)
