@@ -57,7 +57,13 @@ object PhotoProcessor {
         val needed: Boolean get() = enhance != null || portrait || square || stampAt != null
     }
 
-    fun saveOriginal(context: Context, frame: Frame, location: Location?): Uri? {
+    fun saveOriginal(context: Context, frame: Frame, location: Location?, buffered: Boolean = false): Uri? {
+        if (location == null && (buffered || frame.rotation == 0)) {
+            return MediaStoreSaver.publishPhoto(context) { output ->
+                if (buffered) JpegOrientation.write(output, frame.jpeg, frame.rotation)
+                else output.write(frame.jpeg)
+            }
+        }
         val file = MediaStoreSaver.tempFile(context, "jpg")
         return try {
             file.writeBytes(frame.jpeg)

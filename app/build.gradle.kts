@@ -24,8 +24,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10000012
-        versionName = "1.0.0.12"
+        versionCode = 10000013
+        versionName = "1.0.0.13"
 
         // Phones only: drops the x86 copies of the native libraries (about half the APK size).
         ndk {

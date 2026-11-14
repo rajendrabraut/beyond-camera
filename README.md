@@ -126,8 +126,8 @@ alongside the release and older debug builds under the separate `com.beyond.came
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.12`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.12` = `10000012`).
+Four-part versions `a.b.c.d` (current: `1.0.0.13`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.13` = `10000013`).
 
 ## Tech stack
 

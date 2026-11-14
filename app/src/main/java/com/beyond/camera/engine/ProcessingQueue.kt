@@ -10,6 +10,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -18,12 +22,23 @@ object ProcessingQueue {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val jobs = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val revisions = mutableStateMapOf<String, Int>()
+    private val activeCaptures = MutableStateFlow(0)
 
     init {
         scope.launch {
-            for (job in jobs) job()
+            for (job in jobs) {
+                do {
+                    activeCaptures.first { it == 0 }
+                    delay(250)
+                } while (activeCaptures.value != 0)
+                job()
+            }
         }
     }
+
+    fun captureStarted() = activeCaptures.update { it + 1 }
+
+    fun captureFinished() = activeCaptures.update { it - 1 }
 
     // MediaStore can return a volume-specific URI for the same image ID.
     fun revision(uri: Uri): Int = uri.lastPathSegment?.let { revisions[it] } ?: 0
