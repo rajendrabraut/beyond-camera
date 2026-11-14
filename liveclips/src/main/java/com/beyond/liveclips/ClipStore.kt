@@ -21,7 +21,9 @@ internal data class Draft(
     val lengthSeconds: String = "5",
     val videoStartSeconds: String = "0",
     val songStartSeconds: String = "0",
-    val originalSound: Boolean = false
+    val originalSound: Boolean = false,
+    val caption: String = "",
+    val monochrome: Boolean = false
 )
 
 internal fun clipDuration(
@@ -49,7 +51,9 @@ internal class ClipStore(private val context: Context) {
             lengthSeconds = json.optString("duration", "5"),
             videoStartSeconds = json.optString("videoStart", "0"),
             songStartSeconds = json.optString("songStart", "0"),
-            originalSound = json.optBoolean("originalSound")
+            originalSound = json.optBoolean("originalSound"),
+            caption = json.optString("caption").take(100),
+            monochrome = json.optBoolean("monochrome")
         )
     }.getOrDefault(Draft())
 
@@ -61,6 +65,8 @@ internal class ClipStore(private val context: Context) {
             put("videoStart", draft.videoStartSeconds)
             put("songStart", draft.songStartSeconds)
             put("originalSound", draft.originalSound)
+            put("caption", draft.caption)
+            put("monochrome", draft.monochrome)
         }
         val stream = draftFile.startWrite()
         try {
