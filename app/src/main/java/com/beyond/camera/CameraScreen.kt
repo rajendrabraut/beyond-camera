@@ -301,10 +301,8 @@ fun CameraScreen(
         if (last == null) last = latest
     }
     DisposableEffect(Unit) {
-        VolumeKeyEvents.cameraActive = true
         view.keepScreenOn = true
         onDispose {
-            VolumeKeyEvents.cameraActive = false
             view.keepScreenOn = false
             runCatching { live.recording?.stop() }
             live.timelapse.getAndSet(null)?.let { recorder -> Thread { recorder.finish() }.start() }
@@ -559,24 +557,26 @@ fun CameraScreen(
         }
     }
 
-    val shutterTap = rememberUpdatedState<() -> Unit> { onShutterTap() }
-    val shootNow = rememberUpdatedState<(Int) -> Unit> { seconds -> shoot(seconds) }
-    LaunchedEffect(Unit) {
-        VolumeKeyEvents.events.collect { key ->
-            val up = key == KeyEvent.KEYCODE_VOLUME_UP
-            when (settings.volumeKeys) {
-                VolumeKeyAction.SHUTTER -> shutterTap.value()
-                VolumeKeyAction.COUNTDOWN -> {
-                    if (modeState.value.isVideo || modeState.value == CameraMode.SCAN) {
-                        shutterTap.value()
-                    } else {
-                        shootNow.value(if (settings.timerSeconds > 0) settings.timerSeconds else 3)
-                    }
+    val onVolumePress = rememberUpdatedState<(Int) -> Unit> { key ->
+        val up = key == KeyEvent.KEYCODE_VOLUME_UP
+        when (settings.volumeKeys) {
+            VolumeKeyAction.SHUTTER -> onShutterTap()
+            VolumeKeyAction.COUNTDOWN -> {
+                if (mode.isVideo || mode == CameraMode.SCAN) {
+                    onShutterTap()
+                } else {
+                    shoot(if (settings.timerSeconds > 0) settings.timerSeconds else 3)
                 }
-
-                VolumeKeyAction.ZOOM -> engine.setZoom(engine.zoomRatio * if (up) 1.25f else 0.8f)
-                VolumeKeyAction.VOLUME -> Unit
             }
+            VolumeKeyAction.ZOOM -> engine.setZoom(engine.zoomRatio * if (up) 1.25f else 0.8f)
+            VolumeKeyAction.VOLUME -> Unit
+        }
+    }
+    DisposableEffect(Unit) {
+        val callback: (Int) -> Unit = { onVolumePress.value(it) }
+        VolumeKeyEvents.onPress = callback
+        onDispose {
+            if (VolumeKeyEvents.onPress === callback) VolumeKeyEvents.onPress = null
         }
     }
 

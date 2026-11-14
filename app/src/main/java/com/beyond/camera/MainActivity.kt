@@ -81,9 +81,10 @@ class MainActivity : ComponentActivity() {
     // Volume buttons act as camera controls while the camera screen is showing.
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val volume = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        if (volume && VolumeKeyEvents.cameraActive && appSettings.volumeKeys != VolumeKeyAction.VOLUME) {
+        val onPress = VolumeKeyEvents.onPress
+        if (volume && onPress != null && appSettings.volumeKeys != VolumeKeyAction.VOLUME) {
             if (event?.repeatCount == 0 || appSettings.volumeKeys == VolumeKeyAction.ZOOM) {
-                VolumeKeyEvents.events.tryEmit(keyCode)
+                onPress(keyCode)
             }
             return true
         }
@@ -92,7 +93,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         val volume = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        if (volume && VolumeKeyEvents.cameraActive && appSettings.volumeKeys != VolumeKeyAction.VOLUME) return true
+        if (volume && VolumeKeyEvents.onPress != null && appSettings.volumeKeys != VolumeKeyAction.VOLUME) return true
         return super.onKeyUp(keyCode, event)
     }
 }
