@@ -6,7 +6,9 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.location.Location
+import android.os.SystemClock
 import android.provider.MediaStore
+import android.util.Range
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -102,7 +104,8 @@ class CameraEngine(private val context: Context) {
         private set
     var photoReady by mutableStateOf(false)
         private set
-    internal fun photoSnapshot(): PhotoFrames.Snapshot? = photoFrames?.snapshot()
+    internal fun photoSnapshot(): PhotoFrames.Snapshot? =
+        photoFrames?.snapshot(SystemClock.elapsedRealtimeNanos())
     var proCaps by mutableStateOf<ProCaps?>(null)
         private set
     var error by mutableStateOf<String?>(null)
@@ -183,7 +186,11 @@ class CameraEngine(private val context: Context) {
                     imageCapture = capture
                     cases.add(capture)
                     if (cfg.mode == CameraMode.PHOTO) {
-                        val frames = PhotoFrames()
+                        val info = Camera2CameraInfo.from(p.getCameraInfo(base))
+                        val elapsedClock = info.getCameraCharacteristic(
+                            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE
+                        ) == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+                        val frames = PhotoFrames(elapsedClock)
                         photoFrames = frames
                         val scan = cfg.scanInPhoto && base == CameraSelector.DEFAULT_BACK_CAMERA
                         optionalAnalysis = buildAnalysis(aspect, Size(1920, 1440), ImageAnalysis.Analyzer { image ->
@@ -314,6 +321,24 @@ class CameraEngine(private val context: Context) {
         if (usingExtension) return
         runCatching {
             val options = CaptureRequestOptions.Builder()
+            if (photoFrames != null) {
+                val info = Camera2CameraInfo.from(cam.cameraInfo)
+                val fps = Range(30, 30)
+                // Prefer a short frame period for handheld Photo when the HAL offers it.
+                if (info.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                        ?.contains(fps) == true
+                ) {
+                    options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
+                }
+                if (info.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                        ?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+                ) {
+                    options.setCaptureRequestOption(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    )
+                }
+            }
             options.setCaptureRequestOption(
                 CaptureRequest.CONTROL_AE_ANTIBANDING_MODE,
                 when (antiBanding) {
