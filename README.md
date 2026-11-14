@@ -1,14 +1,13 @@
 # Beyond Camera
 
-Beyond is one Android app built with Kotlin, Jetpack Compose and CameraX. Its home screen opens
-**Camera**, **Live Clips**, or **Bitchat**. Camera works offline. Live Clips uses internet access
-when you refresh its music catalog or download songs. Bitchat shares with nearby devices.
+Beyond Camera opens directly to the viewfinder and works offline. It uses Kotlin, Jetpack Compose
+and CameraX.
 
 ## Modes
 
 | Mode | What it does |
 |---|---|
-| Photo | Full-resolution photos, optional HDR, optional live QR / barcode hint |
+| Photo | Rapid capture with flash off, optional HDR and live QR / barcode hints |
 | Portrait | Keeps the person sharp and blurs the background (on-device segmentation) |
 | Night | Saves the first shot immediately and merges three frames to brighten dark scenes and reduce noise |
 | Pro | White balance, focus, shutter speed, ISO and exposure, where the phone's camera supports them |
@@ -19,10 +18,13 @@ when you refresh its music catalog or download songs. Bitchat shares with nearby
 
 ## Image engine
 
-With flash off, Photo mode saves the newest frame available at each shutter tap. The camera
-stream determines the available resolution. JPEG encoding and HDR finishing run afterward.
-If the frame stream is unavailable, the visible camera preview supplies the photo.
-Pro, Portrait and Night use maximum-quality still capture.
+With flash off, Photo mode looks at up to three recent camera frames already available at the
+shutter tap. It selects an earlier frame within 120 ms only when it matches the latest scene
+and shows materially sharper edges. The camera stream determines the available resolution.
+When the stream has no recent frame, Photo requests a hardware still. On compatible cameras,
+Photo enables optical stabilization and requests a fixed 30 fps auto-exposure range to help
+limit long exposures. JPEG encoding and HDR finishing run afterward. Pro, Portrait and Night
+use maximum-quality still capture.
 
 The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
 methods (no code copied):
@@ -124,8 +126,8 @@ alongside the release under the separate `com.beyond.camera.debug` package.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.11`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.11` = `10000011`).
+Four-part versions `a.b.c.d` (current: `1.0.0.12`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.12` = `10000012`).
 
 ## Tech stack
 

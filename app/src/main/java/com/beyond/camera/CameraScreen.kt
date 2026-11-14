@@ -81,7 +81,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.beyond.camera.camera.BindConfig
 import com.beyond.camera.camera.CameraEngine
 import com.beyond.camera.camera.CameraMode
-import com.beyond.camera.camera.Frame
 import com.beyond.camera.engine.EngineTuning
 import com.beyond.camera.engine.ProcessingQueue
 import com.beyond.camera.camera.PhotoProcessor
@@ -102,7 +101,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -318,10 +316,7 @@ fun CameraScreen(
         if (!engine.photoReady || operationBusy) return false
         val instant = mode == CameraMode.PHOTO && flash == FlashSetting.OFF
         val snapshot = if (instant) engine.photoSnapshot() else null
-        val previewFrame = if (instant && snapshot == null &&
-            previewView.previewStreamState.value == PreviewView.StreamState.STREAMING
-        ) previewView.bitmap else null
-        val still = snapshot == null && previewFrame == null
+        val still = snapshot == null
         if (still && capturing) return false
         if (settings.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) }
         flashTick = System.nanoTime()
@@ -360,11 +355,6 @@ fun CameraScreen(
         try {
             val frame = when {
                 snapshot != null -> withContext(Dispatchers.Default) { snapshot.encode(jpegQuality) }
-                previewFrame != null -> withContext(Dispatchers.Default) {
-                    val bytes = ByteArrayOutputStream()
-                    check(previewFrame.compress(android.graphics.Bitmap.CompressFormat.JPEG, jpegQuality, bytes))
-                    Frame(bytes.toByteArray(), 0)
-                }
                 else -> {
                     try {
                         engine.capture()
@@ -415,7 +405,6 @@ fun CameraScreen(
             app.toast("Couldn't take the photo")
             return false
         } finally {
-            previewFrame?.recycle()
             if (mergeNight) {
                 capturing = false
                 nightCapturing = false

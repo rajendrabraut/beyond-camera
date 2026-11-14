@@ -24,8 +24,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10000011
-        versionName = "1.0.0.11"
+        versionCode = 10000012
+        versionName = "1.0.0.12"
 
         // Phones only: drops the x86 copies of the native libraries (about half the APK size).
         ndk {
@@ -48,10 +48,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            resValue("string", "app_name", "Beyond Debug")
+            resValue("string", "app_name", "Beyond Camera Debug")
         }
         release {
-            resValue("string", "app_name", "Beyond")
+            resValue("string", "app_name", "Beyond Camera")
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
@@ -78,7 +78,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":liveclips"))
+    testImplementation("junit:junit:4.13.2")
     val cameraxVersion = "1.6.2"
 
     implementation("androidx.core:core-ktx:1.15.0")

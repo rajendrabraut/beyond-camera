@@ -3,17 +3,27 @@ package com.beyond.camera.camera
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.os.SystemClock
 import androidx.camera.core.ImageProxy
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
-/** Retains the latest camera frame independently of still capture, JPEG encoding and disk I/O. */
-internal class PhotoFrames {
+/** Bounded pre-shutter frames. Only the winning frame is copied at the tap. */
+internal class PhotoFrames(private val sensorUsesElapsedClock: Boolean) {
     private val lock = Any()
     private var staging = ByteArray(0)
-    private var newest: Snapshot? = null
+    private val history = ArrayDeque<BufferedFrame>(3)
+
+    private class BufferedFrame(
+        val snapshot: Snapshot,
+        val timestampNs: Long,
+        val quality: FrameQuality
+    )
 
     fun update(image: ImageProxy) {
+        val arrivalNs = SystemClock.elapsedRealtimeNanos()
+        val sensorNs = image.imageInfo.timestamp
+        val timestampNs = if (sensorUsesElapsedClock && sensorNs in 1..arrivalNs) sensorNs else arrivalNs
         val width = image.width
         val height = image.height
         if (width % 2 != 0 || height % 2 != 0) return
@@ -46,13 +56,32 @@ internal class PhotoFrames {
             copyChroma(vBuffer, v.rowStride, v.pixelStride, width, height, pixels, 0)
             copyChroma(u.buffer, u.rowStride, u.pixelStride, width, height, pixels, 1)
         }
+        val frame = Snapshot(pixels, width, height, image.imageInfo.rotationDegrees)
+        val quality = FrameQuality.measure(pixels, width, height)
         synchronized(lock) {
-            staging = newest?.pixels ?: ByteArray(byteCount)
-            newest = Snapshot(pixels, width, height, image.imageInfo.rotationDegrees)
+            if (history.lastOrNull()?.snapshot?.matchesFormat(frame) == false) history.clear()
+            staging = if (history.size == 3) history.removeFirst().snapshot.pixels else ByteArray(0)
+            history.addLast(BufferedFrame(frame, timestampNs, quality))
         }
     }
 
-    fun snapshot(): Snapshot? = synchronized(lock) { newest?.freeze() }
+    fun snapshot(tapNs: Long): Snapshot? = synchronized(lock) {
+        val newest = history.lastOrNull { it.timestampNs <= tapNs } ?: return@synchronized null
+        if (tapNs - newest.timestampNs > MAX_FRAME_AGE_NS) return@synchronized null
+        var best = newest
+        for (older in history.asReversed()) {
+            if (older.timestampNs >= newest.timestampNs) continue
+            if (tapNs - older.timestampNs > MAX_FRAME_AGE_NS) break
+            // Stop at a scene change, even if a still earlier frame resembles the current one.
+            if (!older.quality.matchesScene(newest.quality)) break
+            if (older.quality.isClearlySharperThan(best.quality)) best = older
+        }
+        best.snapshot.freeze()
+    }
+
+    private companion object {
+        const val MAX_FRAME_AGE_NS = 120_000_000L
+    }
 
     private fun copyChroma(
         source: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int,
@@ -73,6 +102,9 @@ internal class PhotoFrames {
         private val height: Int,
         private val rotation: Int
     ) {
+        fun matchesFormat(other: Snapshot): Boolean =
+            width == other.width && height == other.height && rotation == other.rotation
+
         fun freeze() = Snapshot(pixels.copyOf(), width, height, rotation)
 
         fun encode(quality: Int): Frame {

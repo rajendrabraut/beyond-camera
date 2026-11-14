@@ -96,8 +96,8 @@ jobs:
           echo "Tag builds need the BC_* signing secrets."
           exit 1
 
-      - name: Build and verify Beyond
-        run: ./gradlew :app:assembleDebug :app:assembleRelease :liveclips:testDebugUnitTest :app:lintRelease --no-daemon --stacktrace
+      - name: Build and verify Beyond Camera
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest :app:lintRelease --no-daemon --stacktrace
 
       - name: Remove signing files
         if: always()
@@ -157,6 +157,6 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Beyond ${{ needs.build.outputs.version }}" \
+            --title "Beyond Camera ${{ needs.build.outputs.version }}" \
             --generate-notes \
             --latest
