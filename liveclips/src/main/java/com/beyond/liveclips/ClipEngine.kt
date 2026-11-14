@@ -2,12 +2,20 @@ package com.beyond.liveclips
 
 import android.content.Context
 import android.net.Uri
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.OverlayEffect
+import androidx.media3.effect.RgbFilter
+import androidx.media3.effect.TextOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -27,7 +35,9 @@ internal data class ClipEdit(
     val song: File?,
     val songStartMs: Long,
     val originalSound: Boolean,
-    val height: Int
+    val height: Int,
+    val caption: String,
+    val monochrome: Boolean
 )
 
 internal fun secondsToMs(value: String): Long? {
@@ -48,13 +58,22 @@ internal class ClipEngine(private val context: Context) {
             ).build()
 
     suspend fun export(edit: ClipEdit, output: File) {
+        val videoEffects = buildList<Effect> {
+            add(Presentation.createForWidthAndHeight(
+                edit.height * 9 / 16 / 2 * 2, edit.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+            ))
+            if (edit.monochrome) add(RgbFilter.createGrayscaleFilter())
+            if (edit.caption.isNotBlank()) {
+                val text = SpannableString(edit.caption.trim().chunked(25).joinToString("\n"))
+                text.setSpan(ForegroundColorSpan(android.graphics.Color.WHITE), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                text.setSpan(BackgroundColorSpan(0x99000000.toInt()), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                add(OverlayEffect(listOf(TextOverlay.createStaticTextOverlay(text))))
+            }
+        }
         val video = EditedMediaItem.Builder(clipped(edit.video, edit.videoStartMs, edit.videoStartMs + edit.durationMs))
             .setRemoveAudio(!edit.originalSound)
-            .setEffects(
-                Effects(emptyList(), listOf(Presentation.createForWidthAndHeight(
-                    edit.height * 9 / 16 / 2 * 2, edit.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-                )))
-            ).build()
+            .setEffects(Effects(emptyList(), videoEffects))
+            .build()
         val videoTracks = if (edit.originalSound) setOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO)
             else setOf(C.TRACK_TYPE_VIDEO)
         val sequences = mutableListOf(

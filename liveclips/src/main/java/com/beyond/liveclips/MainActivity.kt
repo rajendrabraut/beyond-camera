@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,7 +15,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.camera.video.VideoRecordEvent
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,7 +48,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -124,7 +121,7 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
     val engine = remember { ClipEngine(app) }
     val recorder = remember { ClipRecorder() }
     val musicPlayer = remember { ExoPlayer.Builder(app).build() }
-    var page by remember(openBitchat) { mutableStateOf(if (openBitchat) Page.BITCHAT else Page.CREATE) }
+    var page by remember(openBitchat) { mutableStateOf(if (openBitchat) Page.BITCHAT else Page.CLIPS) }
     var draft by remember { mutableStateOf(store.read()) }
     var tracks by remember { mutableStateOf(emptyList<Track>()) }
     var clips by remember { mutableStateOf(store.listClips()) }
@@ -270,7 +267,8 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
         } else {
             clipDuration(requested, videoRemaining, songRemaining)
         } ?: error("Choose at least 5 seconds that fit both the video and the song.")
-        ClipEdit(video, videoStart, duration, songFile, songStart, draft.originalSound, if (compact) 480 else 720)
+        ClipEdit(video, videoStart, duration, songFile, songStart, draft.originalSound,
+            if (compact) 480 else 720, draft.caption, draft.monochrome)
     }
 
     fun render(save: Boolean) {
@@ -402,7 +400,33 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
             }
         }
     }) { padding ->
-        Column(
+        if (page == Page.CLIPS) {
+            ClipFeed(
+                clips, selectedClip, store, status,
+                onCreate = { page = Page.CREATE },
+                onSelect = { selectedClip = it },
+                onShare = ::share,
+                onNearby = { sendFile = it; page = Page.BITCHAT },
+                onGallery = { file ->
+                    if (!working) {
+                        working = true
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { store.saveToGallery(file) }
+                                status = "Saved to the gallery."
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                status = e.message ?: "Couldn't save to the gallery."
+                            } finally {
+                                working = false
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.padding(padding)
+            )
+        } else Column(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -451,6 +475,19 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
                     }
                     if (draft.video != null) {
                         SecondsField("Video start in seconds", draft.videoStartSeconds, !busy) { change(draft.copy(videoStartSeconds = it)) }
+                        OutlinedTextField(
+                            value = draft.caption,
+                            onValueChange = { if (it.length <= 100) change(draft.copy(caption = it)) },
+                            enabled = !busy,
+                            label = { Text("Text overlay") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row {
+                            Checkbox(checked = draft.monochrome, enabled = !busy, onCheckedChange = {
+                                change(draft.copy(monochrome = it))
+                            })
+                            Text("Black-and-white filter", Modifier.padding(top = 14.dp))
+                        }
                     }
                     Row {
                         Checkbox(checked = draft.originalSound, enabled = !busy, onCheckedChange = {
@@ -553,51 +590,7 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
                         }
                     }
                 }
-                Page.CLIPS -> {
-                    if (clips.isEmpty()) Text("Your exported videos will appear here.")
-                    selectedClip?.let { file ->
-                        VideoPlayer(file, Modifier.fillMaxWidth().height(320.dp).pointerInput(file, clips) {
-                            var distance = 0f
-                            detectVerticalDragGestures(
-                                onDragStart = { distance = 0f },
-                                onDragEnd = {
-                                    val index = clips.indexOf(file)
-                                    if (distance < -64) clips.getOrNull(index + 1)?.let { selectedClip = it }
-                                    if (distance > 64) clips.getOrNull(index - 1)?.let { selectedClip = it }
-                                }
-                            ) { change, drag ->
-                                change.consume()
-                                distance += drag
-                            }
-                        })
-                        val credit = store.credit(file)
-                        if (credit.isNotBlank()) Text(credit, style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { share(file) }) { Text("Share") }
-                            if (Build.VERSION.SDK_INT >= 29) OutlinedButton(enabled = !working, onClick = {
-                                working = true
-                                scope.launch {
-                                    try {
-                                        withContext(Dispatchers.IO) { store.saveToGallery(file) }
-                                        status = "Saved to the gallery."
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        status = e.message ?: "Couldn't save to the gallery."
-                                    } finally {
-                                        working = false
-                                    }
-                                }
-                            }) { Text("Gallery") }
-                            OutlinedButton(onClick = { sendFile = file; page = Page.BITCHAT }) { Text("Send nearby") }
-                        }
-                    }
-                    clips.forEachIndexed { index, file ->
-                        TextButton(onClick = { selectedClip = file }) {
-                            Text("${if (selectedClip == file) "▶ " else ""}Clip ${clips.size - index}")
-                        }
-                    }
-                }
+                Page.CLIPS -> Unit
                 Page.BITCHAT -> BitchatScreen(store, sendFile, { sendFile = null })
             }
         }

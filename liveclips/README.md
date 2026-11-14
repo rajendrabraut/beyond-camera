@@ -6,8 +6,19 @@ Live Clips and Bitchat open from the Beyond home screen. The `liveclips` module 
 
 1. Open **Music** and choose **Beyond Beat**, import local audio, or download a track from the catalog while connected. The catalog comes from this repository and has an offline copy. The local starter track is generated on the phone.
 2. Open **Create**. Record video or import a file. Choose a duration of at least five seconds and a start point for the video and song. **Full song** uses the selected song from its start offset to the end and requires enough footage.
-3. Preview the edited result or export it as a vertical H.264/AAC MP4. Choose **Compact 480p export** for smaller transfers. Export, drafts, downloaded songs and saved clips use local storage and work without internet.
-4. Share the export, save it to the gallery on Android 10 or later, or offer it to a nearby device in Bitchat. Keep the track's attribution with shared exports. The app shows the source and license and adds the credit when sharing through its share controls.
+3. Add a text overlay or a black-and-white filter, then preview the edit or export it as a vertical H.264/AAC MP4. Choose **Compact 480p export** for smaller transfers. Export, drafts, downloaded songs and saved clips use local storage and work without internet.
+4. Swipe up in **Clips** to play the next video. Likes, comments and saved clips are stored on this device. Share the export, save it to the gallery on Android 10 or later, or offer it to a nearby device in Bitchat. Keep the track's attribution with shared exports. The app shows the source and license and adds the credit when sharing through its share controls.
+
+## Feed source review
+
+- [TikTok-Clone](https://github.com/DaChelimo/TikTok-Clone/tree/a75e23c21e18adbf3307a730a5ebda32ebc338a7) uses MIT licensing and integrates Firebase authentication, databases, analytics and crash reporting plus Cloudflare R2 uploads.
+- [TikTokCompose](https://github.com/oguzhaneksi/TikTokCompose/tree/b2a6207085ac0f4f5644e928465d856e6f44e7d5) uses Apache 2.0 licensing. Its sample calls Reddit and retrieves Mixkit media.
+- [video-feed-lab](https://github.com/nikkiw/video-feed-lab/tree/db167cedf660e4d7c7537b0919d5f60f06ebb243) uses MIT licensing. Its sample streams from a configurable media server and measures playback quality.
+
+Beyond's feed uses AndroidX Compose and Media3 and opens only app-local video files. Refreshing
+the music catalog contacts GitHub. Explicit
+downloads contact the HTTPS audio host listed in the catalog. Bitchat sends data to the nearby
+device selected by the user. These checks are a source review, without a runtime audit of the clone apps.
 
 The Kotlin editor owns trimming, song timing, local drafts, and export options. CameraX records video and AndroidX Media3 decodes, mixes, and renders it using Android codecs.
 
