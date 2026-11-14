@@ -121,7 +121,7 @@ jobs:
             "$bt/aapt2" dump badging "$apk" | sed -n '/^package:/p'
           done
           "$bt/aapt2" dump packagename dist/*-release.apk | grep -Fx 'com.beyond.camera'
-          "$bt/aapt2" dump packagename dist/*-debug.apk | grep -Fx 'com.beyond.camera.debug'
+          "$bt/aapt2" dump packagename dist/*-debug.apk | grep -Fx 'com.beyond.camera.diagnostics'
 
       - name: Verify the published signing certificate
         if: startsWith(github.ref, 'refs/tags/v')

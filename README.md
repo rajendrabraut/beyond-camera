@@ -122,7 +122,7 @@ Night saves its first frame while the shutter ring indicates the three-frame cap
 
 Install `-release.apk` to update the existing Beyond Camera installation. The release retains
 the `com.beyond.camera` package and signing certificate. Install `-debug.apk` to test the build
-alongside the release under the separate `com.beyond.camera.debug` package.
+alongside the release and older debug builds under the separate `com.beyond.camera.diagnostics` package.
 
 ## Versioning
 
