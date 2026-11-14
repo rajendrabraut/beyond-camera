@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -75,11 +76,12 @@ private enum class Page(val title: String, val icon: String) {
 
 class MainActivity : ComponentActivity() {
     private var sharedVideo by mutableStateOf<Uri?>(null)
+    private var openBitchat by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null) receive(intent)
+        receive(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = Color(0xffa8ead2),
@@ -87,27 +89,33 @@ class MainActivity : ComponentActivity() {
                 background = Color(0xff111615),
                 surface = Color(0xff1b211f)
             )) {
-                LiveClips(sharedVideo) { sharedVideo = null }
+                LiveClips(sharedVideo, openBitchat) { sharedVideo = null }
             }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         receive(intent)
     }
 
     @Suppress("DEPRECATION")
     private fun receive(intent: Intent) {
+        openBitchat = intent.action != Intent.ACTION_SEND && intent.getBooleanExtra(OPEN_BITCHAT, false)
         if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("video/") == true) {
             sharedVideo = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.takeIf { it.scheme == "content" }
         }
+    }
+
+    companion object {
+        const val OPEN_BITCHAT = "com.beyond.liveclips.OPEN_BITCHAT"
     }
 }
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun LiveClips(sharedVideo: Uri?, onSharedVideoHandled: () -> Unit) {
+private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHandled: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext
     val scope = rememberCoroutineScope()
@@ -116,7 +124,7 @@ private fun LiveClips(sharedVideo: Uri?, onSharedVideoHandled: () -> Unit) {
     val engine = remember { ClipEngine(app) }
     val recorder = remember { ClipRecorder() }
     val musicPlayer = remember { ExoPlayer.Builder(app).build() }
-    var page by remember { mutableStateOf(Page.CREATE) }
+    var page by remember(openBitchat) { mutableStateOf(if (openBitchat) Page.BITCHAT else Page.CREATE) }
     var draft by remember { mutableStateOf(store.read()) }
     var tracks by remember { mutableStateOf(emptyList<Track>()) }
     var clips by remember { mutableStateOf(store.listClips()) }
@@ -135,6 +143,11 @@ private fun LiveClips(sharedVideo: Uri?, onSharedVideoHandled: () -> Unit) {
     val song = tracks.find { it.id == draft.songId }
     val songFile = song?.let { library.file(it) }
     val busy = working || recording
+
+    BackHandler(enabled = page == Page.BITCHAT && !openBitchat) {
+        sendFile = null
+        page = Page.CLIPS
+    }
 
     DisposableEffect(Unit) { onDispose { musicPlayer.release() } }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
@@ -372,8 +385,8 @@ private fun LiveClips(sharedVideo: Uri?, onSharedVideoHandled: () -> Unit) {
     }
 
     Scaffold(bottomBar = {
-        NavigationBar {
-            Page.entries.forEach { item ->
+        if (page != Page.BITCHAT) NavigationBar {
+            Page.entries.filter { it != Page.BITCHAT }.forEach { item ->
                 NavigationBarItem(
                     selected = page == item,
                     enabled = !busy,

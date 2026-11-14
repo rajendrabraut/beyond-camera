@@ -1,6 +1,6 @@
 # Beyond Live Clips
 
-Beyond Live Clips is the companion app to Beyond Camera. It installs as `com.beyond.liveclips` with its own signing identity. Beyond Camera keeps its existing package and release certificate.
+Live Clips and Bitchat open from the Beyond home screen. The `liveclips` module is included in the same APK as Camera.
 
 ## Create a clip
 
@@ -13,16 +13,18 @@ The Kotlin editor owns trimming, song timing, local drafts, and export options. 
 
 ## Bitchat
 
-Pair two phones in Android Bluetooth settings and open Bitchat in Beyond Live Clips on both phones. Tap **Listen** on the receiving phone. On the sending phone, tap **Refresh**, then select the paired phone. You can send messages or offer files up to 32 MB. The receiver approves each file and the app verifies its SHA-256 checksum before making it available.
+For a file under 32 MB, pair two phones in Android Bluetooth settings and open Bitchat on both phones. Tap **Listen** on the receiving phone. On the sending phone, tap **Refresh**, then select the paired phone.
 
-The current transport is authenticated Bluetooth Classic RFCOMM. It uses a Beyond-specific protocol and works between Beyond Live Clips installations. The design is inspired by [Jack Dorsey's bitchat project](https://github.com/permissionlesstech/bitchat), whose Bluetooth LE mesh uses a separate wire protocol. Beyond uses Android's pairing and link encryption. Direct links require the peers to remain nearby.
+For files of 32 MB or more, or when Bluetooth is unavailable, enable Wi-Fi and tap **Find Wi-Fi Direct devices** on both phones. Choose the recipient and accept Android's connection prompt. Wi-Fi Direct works without internet and supports files up to the available storage on the devices. The recipient approves each file. Beyond compresses blocks with fast lossless DEFLATE when they shrink and verifies the restored file with SHA-256.
+
+The feature is inspired by [Jack Dorsey's bitchat project](https://github.com/permissionlesstech/bitchat). Beyond uses its own direct-transfer protocol on Bluetooth Classic or Wi-Fi Direct. Both devices need the same Beyond version.
 
 ## Build
 
 ```shell
-./gradlew :liveclips:testDebugUnitTest :liveclips:lintDebug :liveclips:assembleDebug
+./gradlew :liveclips:testDebugUnitTest :app:lintRelease :app:assembleDebug :app:assembleRelease
 ```
 
-For a signed release, provide `liveclips-keystore.properties` in the project root or `~/.android/beyond-liveclips-keystore.properties` with `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`. Run `./gradlew :liveclips:assembleRelease`. Store the key and properties outside Git so future releases can use the same certificate.
+The root README describes APK locations and release signing.
 
 The bundled catalog is `src/main/assets/music-catalog.json`. Each entry needs an HTTPS attribution source, an HTTPS audio download and a CC BY 4.0 or CC0 1.0 license. Verify the license and the download URL before adding an entry.

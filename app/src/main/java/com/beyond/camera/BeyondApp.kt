@@ -6,7 +6,6 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
 import com.beyond.camera.settings.AppSettings
-import kotlinx.coroutines.flow.MutableSharedFlow
 
 class BeyondApp : Application(), ImageLoaderFactory {
     val settings: AppSettings by lazy { AppSettings(this) }
@@ -22,9 +21,7 @@ val Context.appSettings: AppSettings
     get() = (applicationContext as BeyondApp).settings
 
 /** Volume-key presses forwarded from the Activity to the camera screen. */
-object VolumeKeyEvents {
-    val events = MutableSharedFlow<Int>(extraBufferCapacity = 8)
-
-    @Volatile
-    var cameraActive = false
+internal object VolumeKeyEvents {
+    // Activity key dispatch and Compose both run on the main thread.
+    var onPress: ((Int) -> Unit)? = null
 }

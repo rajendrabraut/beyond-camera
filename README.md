@@ -1,6 +1,8 @@
 # Beyond Camera
 
-An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
+Beyond is one Android app built with Kotlin, Jetpack Compose and CameraX. Its home screen opens
+**Camera**, **Live Clips**, or **Bitchat**. Camera works offline. Live Clips uses internet access
+when you refresh its music catalog or download songs. Bitchat shares with nearby devices.
 
 ## Modes
 
@@ -17,9 +19,10 @@ An offline Android camera app built with Kotlin, Jetpack Compose and CameraX.
 
 ## Image engine
 
-Photo mode requests the highest available resolution and uses zero shutter lag on supported cameras
-with flash off. Other phones use CameraX's low-latency capture in Photo mode. HDR runs in software
-after capture. Pro, Portrait and Night use maximum-quality capture.
+With flash off, Photo mode saves the newest frame available at each shutter tap. The camera
+stream determines the available resolution. JPEG encoding and HDR finishing run afterward.
+CameraX still capture handles flash and devices that cannot provide the additional frame stream.
+Pro, Portrait and Night use maximum-quality still capture.
 
 The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
 methods (no code copied):
@@ -108,20 +111,21 @@ If neither file exists, the release build is signed with the debug key, so it st
 
 ## Camera updates
 
-The shutter dims while the camera captures a shot. Taps during that interval are ignored.
-Saving and enhancement can continue while the shutter is ready for another photo.
+Rapid taps in Photo mode can save separate frames while JPEG encoding and enhancement run.
+If two taps arrive between camera frames, both photos can show the same frame. The shutter dims
+while a flash or other still capture is in progress.
 Night saves its first frame while the shutter ring indicates the three-frame capture.
 
 ## Installing from GitHub Releases
 
-Use the `-release.apk` file for installation and future updates. Android requires updates to use
-the installed app's signing certificate. If you installed a `-debug.apk`, back up any app data you
-want to keep before uninstalling it and switching to the release build.
+Install `-release.apk` to update the existing Beyond Camera installation. The release retains
+the `com.beyond.camera` package and signing certificate. Install `-debug.apk` to test the build
+alongside the release under the separate `com.beyond.camera.debug` package.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.6`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.6` = `10000006`).
+Four-part versions `a.b.c.d` (current: `1.0.0.7`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.7` = `10000007`).
 
 ## Tech stack
 
