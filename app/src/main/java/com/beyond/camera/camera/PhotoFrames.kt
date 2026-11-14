@@ -76,7 +76,7 @@ internal class PhotoFrames(private val sensorUsesElapsedClock: Boolean) {
             if (!older.quality.matchesScene(newest.quality)) break
             if (older.quality.isClearlySharperThan(best.quality)) best = older
         }
-        best.snapshot.freeze()
+        best.snapshot.freeze((tapNs - best.timestampNs) / 1_000_000L, best !== newest)
     }
 
     private companion object {
@@ -100,12 +100,15 @@ internal class PhotoFrames(private val sensorUsesElapsedClock: Boolean) {
         internal val pixels: ByteArray,
         private val width: Int,
         private val height: Int,
-        private val rotation: Int
+        private val rotation: Int,
+        val ageMs: Long = 0L,
+        val earlier: Boolean = false
     ) {
         fun matchesFormat(other: Snapshot): Boolean =
             width == other.width && height == other.height && rotation == other.rotation
 
-        fun freeze() = Snapshot(pixels.copyOf(), width, height, rotation)
+        fun freeze(ageMs: Long, earlier: Boolean) =
+            Snapshot(pixels.copyOf(), width, height, rotation, ageMs, earlier)
 
         fun encode(quality: Int): Frame {
             val buffer = ByteArrayOutputStream()

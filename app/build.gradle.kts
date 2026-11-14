@@ -47,7 +47,6 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
             resValue("string", "app_name", "Beyond Camera Debug")
         }
         release {
@@ -78,6 +77,7 @@ android {
 }
 
 dependencies {
+    debugImplementation("androidx.work:work-runtime:2.10.1")
     testImplementation("junit:junit:4.13.2")
     val cameraxVersion = "1.6.2"
 
