@@ -21,7 +21,7 @@ when you refresh its music catalog or download songs. Bitchat shares with nearby
 
 With flash off, Photo mode saves the newest frame available at each shutter tap. The camera
 stream determines the available resolution. JPEG encoding and HDR finishing run afterward.
-CameraX still capture handles flash and devices that cannot provide the additional frame stream.
+If the frame stream is unavailable, the visible camera preview supplies the photo.
 Pro, Portrait and Night use maximum-quality still capture.
 
 The app's own engine (`engine/BurstEngine.kt`) was written from scratch, following openly published
@@ -124,8 +124,8 @@ alongside the release under the separate `com.beyond.camera.debug` package.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.7`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.7` = `10000007`).
+Four-part versions `a.b.c.d` (current: `1.0.0.8`). Each update raises the last part.
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.8` = `10000008`).
 
 ## Tech stack
 

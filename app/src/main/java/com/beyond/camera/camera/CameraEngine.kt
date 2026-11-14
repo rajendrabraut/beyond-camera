@@ -100,8 +100,6 @@ class CameraEngine(private val context: Context) {
         private set
     var videoReady by mutableStateOf(false)
         private set
-    var zeroShutterLag by mutableStateOf(false)
-        private set
     var photoReady by mutableStateOf(false)
         private set
     internal fun photoSnapshot(): PhotoFrames.Snapshot? = photoFrames?.snapshot()
@@ -151,7 +149,6 @@ class CameraEngine(private val context: Context) {
 
             p.unbindAll()
             zoomLiveData?.removeObserver(zoomObserver)
-            zeroShutterLag = false
             imageCapture = null
             videoCapture = null
             stabilized = false
@@ -169,11 +166,7 @@ class CameraEngine(private val context: Context) {
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
                     // Standard Photo uses software HDR after capture so OEM HDR can't delay the shutter.
-                    val zsl = cfg.mode == CameraMode.PHOTO && !extensionOn &&
-                        runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
-                    zeroShutterLag = zsl
                     val captureMode = when {
-                        zsl -> ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                         cfg.mode == CameraMode.PHOTO -> ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
                         else -> ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     }
