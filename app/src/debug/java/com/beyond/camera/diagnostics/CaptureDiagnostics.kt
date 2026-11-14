@@ -49,9 +49,9 @@ internal object CaptureDiagnostics {
     private fun prefs(context: Context) = context.getSharedPreferences(WORK, Context.MODE_PRIVATE)
     private fun queue(context: Context) = File(context.noBackupFilesDir, WORK)
 
-    fun photo(context: Context, jpeg: ByteArray, rotation: Int, mode: String, savedMs: Long,
+    fun photo(context: Context, jpeg: ByteArray, rotation: Int, mode: String, timing: PhotoTiming,
         frameAgeMs: Long?, earlier: Boolean) {
-        enqueue(context, jpeg, rotation, mode, savedMs, frameAgeMs, earlier)
+        enqueue(context, jpeg, rotation, mode, timing.totalMs, frameAgeMs, earlier, timing)
     }
 
     fun video(context: Context, mode: String, durationMs: Long) {
@@ -59,7 +59,7 @@ internal object CaptureDiagnostics {
     }
 
     private fun enqueue(context: Context, jpeg: ByteArray?, rotation: Int, mode: String,
-        elapsedMs: Long, frameAgeMs: Long?, earlier: Boolean) {
+        elapsedMs: Long, frameAgeMs: Long?, earlier: Boolean, timing: PhotoTiming? = null) {
         val app = context.applicationContext
         val key = prefs(app).getString(KEY, null) ?: return
         val id = "${System.currentTimeMillis()}-${UUID.randomUUID()}"
@@ -80,6 +80,11 @@ internal object CaptureDiagnostics {
                     put("rotation", rotation)
                     put("frameAgeMs", frameAgeMs)
                     put("earlierFrame", earlier)
+                    if (timing != null) {
+                        put("frameMs", timing.frameMs)
+                        put("saveMs", timing.saveMs)
+                        put("queueMs", timing.queueMs)
+                    }
                 }
                 val folder = queue(app)
                 if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Cannot create diagnostics queue")

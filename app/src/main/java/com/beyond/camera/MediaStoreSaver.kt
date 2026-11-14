@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,7 +46,18 @@ object MediaStoreSaver {
     }
 
     /** Copies a finished temp file into the gallery, then deletes the temp file. */
-    fun publish(context: Context, file: File, isVideo: Boolean, mimeType: String): Uri? {
+    fun publish(context: Context, file: File, isVideo: Boolean, mimeType: String): Uri? = try {
+        publish(context, isVideo, mimeType) { output -> file.inputStream().use { it.copyTo(output) } }
+    } finally {
+        file.delete()
+    }
+
+    internal fun publishPhoto(context: Context, write: (OutputStream) -> Unit): Uri? =
+        publish(context, false, "image/jpeg", write)
+
+    private fun publish(
+        context: Context, isVideo: Boolean, mimeType: String, write: (OutputStream) -> Unit
+    ): Uri? {
         val resolver = context.contentResolver
         val values = if (isVideo) videoValues() else photoValues(mimeType)
         val pending = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
@@ -60,17 +72,15 @@ object MediaStoreSaver {
             val inserted = resolver.insert(collection, values) ?: return null
             uri = inserted
             val out = resolver.openOutputStream(inserted) ?: throw IllegalStateException("No output stream")
-            out.use { stream -> file.inputStream().use { it.copyTo(stream) } }
+            out.use(write)
             if (pending) {
                 val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-                resolver.update(inserted, done, null, null)
+                check(resolver.update(inserted, done, null, null) == 1) { "Couldn't publish capture" }
             }
             inserted
         } catch (e: Exception) {
             uri?.let { runCatching { resolver.delete(it, null, null) } }
             null
-        } finally {
-            file.delete()
         }
     }
 

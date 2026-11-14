@@ -85,6 +85,7 @@ import com.beyond.camera.engine.EngineTuning
 import com.beyond.camera.engine.ProcessingQueue
 import com.beyond.camera.camera.PhotoProcessor
 import com.beyond.camera.diagnostics.CaptureDiagnostics
+import com.beyond.camera.diagnostics.PhotoTiming
 import com.beyond.camera.camera.ProState
 import com.beyond.camera.camera.TimelapseRecorder
 import com.beyond.camera.qr.QrDecoder
@@ -98,6 +99,7 @@ import com.beyond.camera.settings.VolumeKeyAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -124,6 +126,12 @@ private enum class FlashSetting(val mode: Int, val icon: ImageVector, val label:
 }
 
 /** Things that must stay reachable from callbacks and clean-up, outside Compose state. */
+@OptIn(ExperimentalCoroutinesApi::class)
+private val photoEncoder = Dispatchers.Default.limitedParallelism(1)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private val photoStorage = Dispatchers.IO.limitedParallelism(2)
+
 private class Live {
     var recording: Recording? = null
     val timelapse = AtomicReference<TimelapseRecorder?>(null)
@@ -324,6 +332,7 @@ fun CameraScreen(
         flashTick = System.nanoTime()
 
         val capturedAt = System.currentTimeMillis()
+        val captureMode = mode.name
         val order = ++captureOrder
         val saveLocation = settings.saveLocation
         val jpegQuality = settings.pictureQuality.jpeg
@@ -354,9 +363,15 @@ fun CameraScreen(
             nightCapturing = mergeNight
         }
         inFlight++
+        ProcessingQueue.captureStarted()
         try {
+            var frameStarted = SystemClock.elapsedRealtime()
+            val frameDispatched = frameStarted
             val frame = when {
-                snapshot != null -> withContext(Dispatchers.Default) { snapshot.encode(jpegQuality) }
+                snapshot != null -> withContext(photoEncoder) {
+                    frameStarted = SystemClock.elapsedRealtime()
+                    snapshot.encode(jpegQuality)
+                }
                 else -> {
                     try {
                         engine.capture()
@@ -365,12 +380,21 @@ fun CameraScreen(
                     }
                 }
             }
-            val (uri, location) = withContext(Dispatchers.IO) {
+            val frameFinished = SystemClock.elapsedRealtime()
+            val (uri, location) = withContext(photoStorage) {
+                val writeStarted = SystemClock.elapsedRealtime()
                 val location = if (saveLocation) LocationHelper.lastKnown(app) else null
-                val uri = PhotoProcessor.saveOriginal(app, frame, location)
+                val uri = PhotoProcessor.saveOriginal(app, frame, location, buffered = snapshot != null)
                 if (uri != null) {
-                    CaptureDiagnostics.photo(app, frame.jpeg, frame.rotation, mode.name,
-                        SystemClock.elapsedRealtime() - captureStarted, snapshot?.ageMs, snapshot?.earlier == true)
+                    val written = SystemClock.elapsedRealtime()
+                    val timing = PhotoTiming(
+                        totalMs = written - captureStarted,
+                        frameMs = frameFinished - frameStarted,
+                        saveMs = written - writeStarted,
+                        queueMs = frameStarted - frameDispatched + writeStarted - frameFinished
+                    )
+                    CaptureDiagnostics.photo(app, frame.jpeg, frame.rotation, captureMode,
+                        timing, snapshot?.ageMs, snapshot?.earlier == true)
                 }
                 uri to location
             }
@@ -412,6 +436,7 @@ fun CameraScreen(
             app.toast("Couldn't take the photo")
             return false
         } finally {
+            ProcessingQueue.captureFinished()
             if (mergeNight) {
                 capturing = false
                 nightCapturing = false
