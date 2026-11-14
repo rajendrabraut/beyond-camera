@@ -15,6 +15,8 @@ val releaseKeystoreProps: Properties? = listOf(
     Properties().apply { file.inputStream().use { load(it) } }
 }
 
+val publishedDiagnosticsKeystore = providers.environmentVariable("BC_DIAGNOSTICS_KEYSTORE")
+
 android {
     namespace = "com.beyond.camera"
     compileSdk = 36
@@ -24,16 +26,23 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10000013
-        versionName = "1.0.0.13"
+        versionCode = 10001000
+        versionName = "1.0.1.0"
 
-        // Phones only: drops the x86 copies of the native libraries (about half the APK size).
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
     }
 
     signingConfigs {
+        publishedDiagnosticsKeystore.orNull?.let { path ->
+            getByName("debug").apply {
+                storeFile = file(path)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
         if (releaseKeystoreProps != null) {
             create("release") {
                 storeFile = file(releaseKeystoreProps.getProperty("storeFile"))

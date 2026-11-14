@@ -426,7 +426,7 @@ class CameraEngine(private val context: Context) {
         val builder = MediaStoreOutputOptions.Builder(
             context.contentResolver,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        ).setContentValues(MediaStoreSaver.videoValues())
+        ).setContentValues(MediaStoreSaver.videoValues(context))
         if (location != null) builder.setLocation(location)
         var pending = video.output.prepareRecording(context, builder.build())
         if (withAudio) pending = pending.withAudioEnabled()

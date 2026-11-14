@@ -1,0 +1,55 @@
+name: iOS build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Compile device release
+        run: |
+          set -o pipefail
+          xcodebuild -project BeyondCamera.xcodeproj -scheme BeyondCamera \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath DerivedData/Device CODE_SIGNING_ALLOWED=NO build -quiet
+      - name: Compile and smoke-test the simulator app
+        run: |
+          set -o pipefail
+          xcodebuild -project BeyondCamera.xcodeproj -scheme BeyondCamera \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath DerivedData/Simulator CODE_SIGNING_ALLOWED=NO build -quiet
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if d["name"].startswith("iPhone")))' )"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" DerivedData/Simulator/Build/Products/Debug-iphonesimulator/BeyondCamera.app
+          xcrun simctl launch "$device" com.beyond.camera
+      - name: Package the simulator build
+        run: |
+          ditto -c -k --keepParent \
+            DerivedData/Simulator/Build/Products/Debug-iphonesimulator/BeyondCamera.app \
+            BeyondCamera-iOS-Simulator.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BeyondCamera-iOS-Simulator
+          path: ios/BeyondCamera-iOS-Simulator.zip
+          if-no-files-found: error

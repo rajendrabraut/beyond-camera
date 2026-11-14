@@ -135,6 +135,7 @@ private val photoStorage = Dispatchers.IO.limitedParallelism(2)
 private class Live {
     var recording: Recording? = null
     val timelapse = AtomicReference<TimelapseRecorder?>(null)
+    var videoStopRequestedAt: Long? = null
     var lastPinchAt = 0L
     var zoomTarget = 1f
     var burstHeld = false
@@ -173,15 +174,7 @@ fun CameraScreen(
     val scanPaused = remember { AtomicBoolean(false) }
     val lastScanAt = remember { AtomicLong(0L) }
 
-    var mode by remember {
-        mutableStateOf(
-            Session.mode ?: if (settings.savePreviousMode) {
-                runCatching { CameraMode.valueOf(settings.lastMode) }.getOrDefault(CameraMode.PHOTO)
-            } else {
-                CameraMode.PHOTO
-            }
-        )
-    }
+    var mode by remember { mutableStateOf(Session.mode ?: CameraMode.PHOTO) }
     var front by remember { mutableStateOf(Session.front) }
     var flash by remember { mutableStateOf(FlashSetting.OFF) }
     var torch by remember { mutableStateOf(false) }
@@ -332,6 +325,7 @@ fun CameraScreen(
         flashTick = System.nanoTime()
 
         val capturedAt = System.currentTimeMillis()
+        val photoName = CaptureNames.photo(capturedAt)
         val captureMode = mode.name
         val order = ++captureOrder
         val saveLocation = settings.saveLocation
@@ -384,7 +378,7 @@ fun CameraScreen(
             val (uri, location) = withContext(photoStorage) {
                 val writeStarted = SystemClock.elapsedRealtime()
                 val location = if (saveLocation) LocationHelper.lastKnown(app) else null
-                val uri = PhotoProcessor.saveOriginal(app, frame, location, buffered = snapshot != null)
+                val uri = PhotoProcessor.saveOriginal(app, frame, location, snapshot != null, photoName)
                 if (uri != null) {
                     val written = SystemClock.elapsedRealtime()
                     val timing = PhotoTiming(
@@ -466,11 +460,16 @@ fun CameraScreen(
     fun toggleVideo() {
         val current = live.recording
         if (current != null) {
+            if (live.videoStopRequestedAt != null) return
+            live.videoStopRequestedAt = SystemClock.elapsedRealtime()
             CaptureDiagnostics.video(app, "${mode.name} / stop requested", recordedMs)
             current.stop()
             return
         }
         if (!engine.videoReady) return
+        val recordingMode = mode.name
+        val startRequestedAt = SystemClock.elapsedRealtime()
+        live.videoStopRequestedAt = null
         val withAudio = app.hasPermission(Manifest.permission.RECORD_AUDIO)
         if (!withAudio) app.toast("Recording without sound (microphone not allowed)")
         val location = if (settings.saveLocation) LocationHelper.lastKnown(app) else null
@@ -478,18 +477,26 @@ fun CameraScreen(
         if (settings.shutterSound) runCatching { sound.play(MediaActionSound.START_VIDEO_RECORDING) }
         val started = engine.startRecording(withAudio, location) { event ->
             when (event) {
-                is VideoRecordEvent.Start -> CaptureDiagnostics.video(app, "${mode.name} / recording started", 0)
+                is VideoRecordEvent.Start -> CaptureDiagnostics.video(
+                    app, "$recordingMode / recording started", 0,
+                    startMs = SystemClock.elapsedRealtime() - startRequestedAt
+                )
                 is VideoRecordEvent.Status -> {
                     recordedMs = TimeUnit.NANOSECONDS.toMillis(event.recordingStats.recordedDurationNanos)
                     if (modeState.value == CameraMode.CLIP && recordedMs >= settings.shortVideoSeconds * 1000L) {
-                        live.recording?.stop()
+                        if (live.videoStopRequestedAt == null) {
+                            live.videoStopRequestedAt = SystemClock.elapsedRealtime()
+                            live.recording?.stop()
+                        }
                     }
                 }
 
                 is VideoRecordEvent.Finalize -> {
                     val result = if (event.hasError()) "error ${event.error}" else "saved"
-                    CaptureDiagnostics.video(app, "${mode.name} / $result",
-                        TimeUnit.NANOSECONDS.toMillis(event.recordingStats.recordedDurationNanos))
+                    CaptureDiagnostics.video(app, "$recordingMode / $result",
+                        TimeUnit.NANOSECONDS.toMillis(event.recordingStats.recordedDurationNanos),
+                        finishMs = live.videoStopRequestedAt?.let { SystemClock.elapsedRealtime() - it })
+                    live.videoStopRequestedAt = null
                     live.recording = null
                     isRecording = false
                     if (settings.shutterSound) runCatching { sound.play(MediaActionSound.STOP_VIDEO_RECORDING) }
@@ -509,12 +516,17 @@ fun CameraScreen(
     fun toggleTimelapse() {
         val running = live.timelapse.getAndSet(null)
         if (running != null) {
+            val stopRequestedAt = SystemClock.elapsedRealtime()
             isRecording = false
             operationBusy = true
             scope.launch {
                 val uri = withContext(Dispatchers.IO) { running.finish() }
                 operationBusy = false
-                CaptureDiagnostics.video(app, if (uri != null) "Time-lapse / saved" else "Time-lapse / save failed", 0)
+                CaptureDiagnostics.video(
+                    app, if (uri != null) "Time-lapse / saved" else "Time-lapse / save failed",
+                    running.frameCount * 1000L / 30,
+                    finishMs = SystemClock.elapsedRealtime() - stopRequestedAt
+                )
                 if (uri != null) last = MediaItem(uri, true) else app.toast("Too short: keep recording a little longer")
             }
         } else if (engine.bound && !operationBusy) {
@@ -535,7 +547,6 @@ fun CameraScreen(
         countdown = null
         mode = target
         Session.mode = target
-        settings.lastMode = target.name
         showPanel = false
         qrChip = null
         scanPaused.set(false)

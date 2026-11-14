@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.beyond.camera.BuildConfig
+import com.beyond.camera.CaptureNames
 import com.beyond.camera.Ui
 import com.beyond.camera.appSettings
 import com.beyond.camera.hasPermission
@@ -55,6 +57,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val s = context.appSettings
     var confirmReset by remember { mutableStateOf(false) }
+    var folderInput by remember { mutableStateOf<String?>(null) }
 
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -135,9 +138,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 SwitchRow("Shutter sound", null, s.shutterSound) { s.shutterSound = it }
-                SwitchRow("Remember last mode", "Opens in the mode you used last instead of Photo.", s.savePreviousMode) {
-                    s.savePreviousMode = it
-                }
+                val folder = s.captureFolder.ifEmpty { "BeyondCamera" }
+                InfoRow("Save folder", "Pictures/$folder and Movies/$folder")
+                ActionRow("Change save folder") { folderInput = s.captureFolder }
                 ChoiceRow("Anti-flicker", AntiBanding.entries, s.antiBanding, { it.label }) { s.antiBanding = it }
             }
 
@@ -158,6 +161,32 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    folderInput?.let { input ->
+        val valid = input.isBlank() || CaptureNames.folder(input) != null
+        AlertDialog(
+            onDismissRequest = { folderInput = null },
+            title = { Text("Save folder") },
+            text = {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { folderInput = it },
+                    label = { Text("Folder under Pictures and Movies") },
+                    placeholder = { Text("BeyondCamera") },
+                    singleLine = true,
+                    isError = !valid,
+                    supportingText = { Text(if (valid) "Leave blank to use BeyondCamera." else "Enter one valid folder name.") }
+                )
+            },
+            dismissButton = { TextButton(onClick = { folderInput = null }) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(enabled = valid, onClick = {
+                    s.captureFolder = CaptureNames.folder(input).orEmpty()
+                    folderInput = null
+                }) { Text("Save") }
+            }
+        )
     }
 
     if (confirmReset) {

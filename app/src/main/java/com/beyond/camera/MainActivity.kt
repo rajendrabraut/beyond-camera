@@ -46,6 +46,7 @@ import com.beyond.camera.qr.QrCreateScreen
 import com.beyond.camera.qr.QrHistoryScreen
 import com.beyond.camera.settings.SettingsScreen
 import com.beyond.camera.settings.VolumeKeyAction
+import com.beyond.camera.camera.CameraMode
 import com.beyond.camera.viewer.ViewerScreen
 
 private enum class Screen { CAMERA, SETTINGS, VIEWER, QR_HISTORY, QR_CREATE }
@@ -53,6 +54,7 @@ private enum class Screen { CAMERA, SETTINGS, VIEWER, QR_HISTORY, QR_CREATE }
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Session.mode = CameraMode.PHOTO
         enableEdgeToEdge()
         MediaStoreSaver.clearTemp(this)
         setContent {

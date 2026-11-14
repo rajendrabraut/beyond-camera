@@ -57,9 +57,9 @@ object PhotoProcessor {
         val needed: Boolean get() = enhance != null || portrait || square || stampAt != null
     }
 
-    fun saveOriginal(context: Context, frame: Frame, location: Location?, buffered: Boolean = false): Uri? {
+    fun saveOriginal(context: Context, frame: Frame, location: Location?, buffered: Boolean, name: String): Uri? {
         if (location == null && (buffered || frame.rotation == 0)) {
-            return MediaStoreSaver.publishPhoto(context) { output ->
+            return MediaStoreSaver.publishPhoto(context, name) { output ->
                 if (buffered) JpegOrientation.write(output, frame.jpeg, frame.rotation)
                 else output.write(frame.jpeg)
             }
@@ -78,7 +78,7 @@ object PhotoProcessor {
                     if (needsOrientation || location != null) exif.saveAttributes()
                 }
             }
-            MediaStoreSaver.publish(context, file, false, "image/jpeg")
+            MediaStoreSaver.publish(context, file, false, "image/jpeg", name)
         } catch (e: Exception) {
             file.delete()
             null
