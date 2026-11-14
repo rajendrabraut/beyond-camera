@@ -46,8 +46,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
-            resValue("string", "app_name", "Beyond Camera Debug")
+            applicationIdSuffix = ".diagnostics"
+            resValue("string", "app_name", "Beyond Camera Diagnostics")
         }
         release {
             resValue("string", "app_name", "Beyond Camera")
