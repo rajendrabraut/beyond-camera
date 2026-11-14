@@ -35,6 +35,7 @@ class TimelapseRecorder(
     private var row = ByteArray(0)
     private val info = MediaCodec.BufferInfo()
     private val file: File = MediaStoreSaver.tempFile(context, "mp4")
+    private var pendingVideo: MediaStoreSaver.PendingVideo? = null
 
     fun onFrame(image: ImageProxy) {
         synchronized(lock) {
@@ -84,7 +85,13 @@ class TimelapseRecorder(
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoder.start()
         codec = encoder
-        muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
+        val pending = runCatching { MediaStoreSaver.openPendingVideo(context) }.getOrNull()
+        pendingVideo = pending
+        muxer = (if (pending != null) {
+            MediaMuxer(pending.descriptor.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        } else {
+            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        }).apply {
             setOrientationHint(((rotation % 360) + 360) % 360)
         }
     }
@@ -171,7 +178,7 @@ class TimelapseRecorder(
                     if (index >= 0) {
                         c.queueInputBuffer(index, 0, 0, frames * FRAME_US, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         drain(true)
-                    }
+                    } else ok = false
                 }
             } catch (t: Throwable) {
                 ok = false
@@ -186,6 +193,10 @@ class TimelapseRecorder(
             }
             runCatching { muxer?.release() }
             muxer = null
+            pendingVideo?.let { pending ->
+                pendingVideo = null
+                return pending.finish(ok)
+            }
             if (!ok) {
                 file.delete()
                 return null

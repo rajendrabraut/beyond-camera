@@ -45,8 +45,8 @@ class AppSettings(context: Context) {
 
     // General
     var saveLocation by bool("save_location", false)
+    var captureFolder by string("capture_folder", "")
     var shutterSound by bool("shutter_sound", true)
-    var savePreviousMode by bool("save_previous_mode", false)
     var antiBanding by enumPref("anti_banding", AntiBanding.AUTO, AntiBanding.entries)
 
     // Quick panel
@@ -59,8 +59,6 @@ class AppSettings(context: Context) {
     var smartProcessing by bool("smart_processing", true)
     var timelapseIntervalMs by int("timelapse_interval", 1000)
     var shortVideoSeconds by int("short_video_seconds", 15)
-
-    var lastMode by string("last_mode", "PHOTO")
 
     fun restoreDefaults() {
         prefs.edit().clear().apply()

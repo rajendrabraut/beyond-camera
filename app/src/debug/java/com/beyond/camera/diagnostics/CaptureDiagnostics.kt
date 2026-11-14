@@ -54,12 +54,13 @@ internal object CaptureDiagnostics {
         enqueue(context, jpeg, rotation, mode, timing.totalMs, frameAgeMs, earlier, timing)
     }
 
-    fun video(context: Context, mode: String, durationMs: Long) {
-        enqueue(context, null, 0, mode, durationMs, null, false)
+    fun video(context: Context, mode: String, durationMs: Long, startMs: Long? = null, finishMs: Long? = null) {
+        enqueue(context, null, 0, mode, durationMs, null, false, startMs = startMs, finishMs = finishMs)
     }
 
     private fun enqueue(context: Context, jpeg: ByteArray?, rotation: Int, mode: String,
-        elapsedMs: Long, frameAgeMs: Long?, earlier: Boolean, timing: PhotoTiming? = null) {
+        elapsedMs: Long, frameAgeMs: Long?, earlier: Boolean, timing: PhotoTiming? = null,
+        startMs: Long? = null, finishMs: Long? = null) {
         val app = context.applicationContext
         val key = prefs(app).getString(KEY, null) ?: return
         val id = "${System.currentTimeMillis()}-${UUID.randomUUID()}"
@@ -80,6 +81,8 @@ internal object CaptureDiagnostics {
                     put("rotation", rotation)
                     put("frameAgeMs", frameAgeMs)
                     put("earlierFrame", earlier)
+                    put("startMs", startMs)
+                    put("finishMs", finishMs)
                     if (timing != null) {
                         put("frameMs", timing.frameMs)
                         put("saveMs", timing.saveMs)

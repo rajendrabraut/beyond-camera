@@ -121,13 +121,24 @@ Night saves its first frame while the shutter ring indicates the three-frame cap
 ## Installing from GitHub Releases
 
 Install `-release.apk` to update the existing Beyond Camera installation. The release retains
-the `com.beyond.camera` package and signing certificate. Install `-debug.apk` to test the build
+the `com.beyond.camera` package and signing certificate. Install `-diagnostics.apk` to test captures
 alongside the release and older debug builds under the separate `com.beyond.camera.diagnostics` package.
+Starting with 1.0.1.0, the GitHub debug download is named `-diagnostics.apk`, and GitHub builds it
+with the same signing certificate as the earlier diagnostics download.
+GitHub also publishes a `-release.aab` for store submission.
+
+## iOS build
+
+The native iOS 16+ camera lives in [ios](ios). It captures photos and videos and saves them
+to Apple Photos. On a Mac, install Xcode and XcodeGen, run `xcodegen generate` in `ios`,
+then open `BeyondCamera.xcodeproj`. Select your Apple development team to run on a physical device.
+The iOS GitHub workflow compiles the device build and launches the simulator build.
 
 ## Versioning
 
-Four-part versions `a.b.c.d` (current: `1.0.0.13`). Each update raises the last part.
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.0.13` = `10000013`).
+Four-part Android versions use `a.b.c.d` (current: `1.0.1.0`).
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.1.0` = `10001000`).
+The iOS marketing version is `1.0.1`.
 
 ## Tech stack
 

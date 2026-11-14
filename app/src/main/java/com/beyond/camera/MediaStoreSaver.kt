@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import java.io.File
 import java.io.OutputStream
@@ -29,37 +30,78 @@ object MediaStoreSaver {
     private const val ALBUM = "BeyondCamera"
     private const val PREFIX = "BeyondCamera_"
 
-    fun photoValues(mimeType: String = "image/jpeg"): ContentValues =
-        values(mimeType, Environment.DIRECTORY_PICTURES)
+    fun videoValues(context: Context): ContentValues =
+        values(context, "video/mp4", Environment.DIRECTORY_MOVIES)
 
-    fun videoValues(): ContentValues = values("video/mp4", Environment.DIRECTORY_MOVIES)
+    internal class PendingVideo(
+        private val context: Context,
+        private val uri: Uri,
+        val descriptor: ParcelFileDescriptor
+    ) {
+        private fun remove() { runCatching { context.contentResolver.delete(uri, null, null) } }
 
-    private fun values(mimeType: String, directory: String): ContentValues {
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        fun finish(keep: Boolean): Uri? {
+            val closed = runCatching { descriptor.close() }.isSuccess
+            if (closed && keep) {
+                val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                if (runCatching { context.contentResolver.update(uri, done, null, null) }.getOrNull() == 1) return uri
+            }
+            remove()
+            return null
+        }
+    }
+
+    internal fun openPendingVideo(context: Context): PendingVideo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val resolver = context.contentResolver
+        val values = videoValues(context).apply { put(MediaStore.MediaColumns.IS_PENDING, 1) }
+        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+        try {
+            resolver.openFileDescriptor(uri, "rw")?.let { return PendingVideo(context, uri, it) }
+        } catch (_: Exception) {
+            // Remove the pending row when the provider cannot open it.
+        }
+        runCatching { resolver.delete(uri, null, null) }
+        return null
+    }
+
+    private fun values(context: Context, mimeType: String, directory: String, photoName: String? = null): ContentValues {
+        val extension = when (mimeType) {
+            "image/png" -> "png"
+            "video/mp4" -> "mp4"
+            else -> "jpg"
+        }
+        val name = photoName ?: "$PREFIX${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.$extension"
+        val folder = CaptureNames.folder(context.appSettings.captureFolder) ?: ALBUM
         return ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "$PREFIX$stamp")
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, "$directory/$ALBUM")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "$directory/$folder/")
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(directory), folder)
+                dir.mkdirs()
+                put(MediaStore.MediaColumns.DATA, File(dir, name).absolutePath)
             }
         }
     }
 
     /** Copies a finished temp file into the gallery, then deletes the temp file. */
-    fun publish(context: Context, file: File, isVideo: Boolean, mimeType: String): Uri? = try {
-        publish(context, isVideo, mimeType) { output -> file.inputStream().use { it.copyTo(output) } }
+    fun publish(context: Context, file: File, isVideo: Boolean, mimeType: String, photoName: String? = null): Uri? = try {
+        publish(context, isVideo, mimeType, photoName) { output -> file.inputStream().use { it.copyTo(output) } }
     } finally {
         file.delete()
     }
 
-    internal fun publishPhoto(context: Context, write: (OutputStream) -> Unit): Uri? =
-        publish(context, false, "image/jpeg", write)
+    internal fun publishPhoto(context: Context, name: String, write: (OutputStream) -> Unit): Uri? =
+        publish(context, false, "image/jpeg", name, write)
 
     private fun publish(
-        context: Context, isVideo: Boolean, mimeType: String, write: (OutputStream) -> Unit
+        context: Context, isVideo: Boolean, mimeType: String, photoName: String?, write: (OutputStream) -> Unit
     ): Uri? {
         val resolver = context.contentResolver
-        val values = if (isVideo) videoValues() else photoValues(mimeType)
+        val values = if (isVideo) videoValues(context)
+            else values(context, mimeType, Environment.DIRECTORY_PICTURES, photoName)
         val pending = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         if (pending) values.put(MediaStore.MediaColumns.IS_PENDING, 1)
         val collection = if (isVideo) {
@@ -118,9 +160,13 @@ object MediaStoreSaver {
         return if (items.size > limit) items.subList(0, limit) else items
     }
 
-    fun latest(context: Context): MediaItem? = query(context).firstOrNull()
+    fun latest(context: Context): MediaItem? =
+        listOfNotNull(
+            queryCollection(context, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, false, 1).firstOrNull(),
+            queryCollection(context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, 1).firstOrNull()
+        ).maxByOrNull { it.dateAdded }
 
-    private fun queryCollection(context: Context, collection: Uri, isVideo: Boolean): List<MediaItem> {
+    private fun queryCollection(context: Context, collection: Uri, isVideo: Boolean, limit: Int = 500): List<MediaItem> {
         val result = ArrayList<MediaItem>()
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -134,8 +180,8 @@ object MediaStoreSaver {
             context.contentResolver.query(
                 collection,
                 projection,
-                "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?",
-                arrayOf("$PREFIX%"),
+                "${MediaStore.MediaColumns.DISPLAY_NAME} GLOB ? OR ${MediaStore.MediaColumns.DISPLAY_NAME} GLOB ?",
+                arrayOf("$PREFIX*", "BYND_IMG_*"),
                 "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC"
             )?.use { cursor ->
                 val id = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
@@ -144,7 +190,7 @@ object MediaStoreSaver {
                 val size = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                 val width = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.WIDTH)
                 val height = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
-                while (cursor.moveToNext()) {
+                while (result.size < limit && cursor.moveToNext()) {
                     result.add(
                         MediaItem(
                             uri = ContentUris.withAppendedId(collection, cursor.getLong(id)),

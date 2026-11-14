@@ -96,19 +96,30 @@ jobs:
           echo "Tag builds need the BC_* signing secrets."
           exit 1
 
+      - name: Set up diagnostics signing
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_B64: ${{ secrets.BC_DIAGNOSTICS_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/diagnostics.jks"
+          echo "BC_DIAGNOSTICS_KEYSTORE=$RUNNER_TEMP/diagnostics.jks" >> "$GITHUB_ENV"
+
       - name: Build and verify Beyond Camera
-        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest :app:lintRelease --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease :app:testDebugUnitTest :app:lintRelease --no-daemon --stacktrace
 
       - name: Remove signing files
         if: always()
-        run: rm -f keystore.properties "$RUNNER_TEMP/release.jks"
+        run: rm -f keystore.properties "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/diagnostics.jks"
 
       - name: Name the APKs
         run: |
           v="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/BeyondCamera-$v-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/BeyondCamera-$v-diagnostics.apk"
           cp app/build/outputs/apk/release/app-release.apk "dist/BeyondCamera-$v-release.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "dist/BeyondCamera-$v-release.aab"
           ls -l dist
 
       - name: Verify signatures and version
@@ -119,9 +130,10 @@ jobs:
             echo "== $apk"
             "$bt/apksigner" verify --print-certs "$apk" | grep "certificate DN"
             "$bt/aapt2" dump badging "$apk" | sed -n '/^package:/p'
+            "$bt/zipalign" -c -P 16 4 "$apk"
           done
           "$bt/aapt2" dump packagename dist/*-release.apk | grep -Fx 'com.beyond.camera'
-          "$bt/aapt2" dump packagename dist/*-debug.apk | grep -Fx 'com.beyond.camera.diagnostics'
+          "$bt/aapt2" dump packagename dist/*-diagnostics.apk | grep -Fx 'com.beyond.camera.diagnostics'
 
       - name: Verify the published signing certificate
         if: startsWith(github.ref, 'refs/tags/v')
@@ -129,12 +141,14 @@ jobs:
           set -o pipefail
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs dist/*-release.apk \
             | grep -Fx "Signer #1 certificate SHA-256 digest: 0a5b103d5a618cdcc640ecc66055cc3c378e326da4c1742341fe51972b04c526"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs dist/*-diagnostics.apk \
+            | grep -Fx "Signer #1 certificate SHA-256 digest: ff0f2eda2c227cde4a33af11fe46ac9e00427ea5f4a3e83c6ea77f96048022d7"
 
       - name: Upload APKs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: BeyondCamera-${{ steps.version.outputs.version }}-apks
-          path: dist/*.apk
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
 
@@ -145,6 +159,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download APKs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -155,8 +172,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.apk \
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          args=(--generate-notes)
+          if [ -f "$notes" ]; then args=(--notes-file "$notes"); fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Beyond Camera ${{ needs.build.outputs.version }}" \
-            --generate-notes \
-            --latest
+            "${args[@]}" \
+            --prerelease
