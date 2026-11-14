@@ -11,6 +11,13 @@ Live Clips and Bitchat open from the Beyond home screen. The `liveclips` module 
 
 ## Feed source review
 
+### Phone-to-phone publishing
+
+- In **Clips**, open **My profile** to set the name sent with your nearby clips. Choose **Share → Send nearby** on a clip to offer it via Bluetooth or Wi-Fi Direct. After the other phone accepts it, its **For You** feed includes the saved copy. Tap the creator name and **Follow** to see that creator’s saved clips in **Following**. Likes, comments, and follows are private to the viewer’s device.
+- For remote playback, choose **Share → Stream from this phone**. Enter an IP address or DNS name the viewer can reach and the TCP port. **Use local address** fills a LAN address for viewers on the same network. Across networks use a shared VPN or forward that TCP port to the phone and enter the router’s reachable address. Mobile networks behind carrier NAT typically need a VPN. The app starts no external relay.
+- Tap **Start hosting**, send the private link, and keep the Stream screen open. The viewer pastes the full link into **Live Clips → Stream → Watch**. Beyond verifies the host certificate fingerprint from the link and sends the clip over TLS. Anyone with the link can watch while the stream is running. **Stop hosting** closes current connections and invalidates the link.
+- Streaming plays an existing MP4 on demand. Nearby transfers are the way to take a copy offline. This release has no live camera broadcasting or global synchronized social feed.
+
 - [TikTok-Clone](https://github.com/DaChelimo/TikTok-Clone/tree/a75e23c21e18adbf3307a730a5ebda32ebc338a7) uses MIT licensing and integrates Firebase authentication, databases, analytics and crash reporting plus Cloudflare R2 uploads.
 - [TikTokCompose](https://github.com/oguzhaneksi/TikTokCompose/tree/b2a6207085ac0f4f5644e928465d856e6f44e7d5) uses Apache 2.0 licensing. Its sample calls Reddit and retrieves Mixkit media.
 - [video-feed-lab](https://github.com/nikkiw/video-feed-lab/tree/db167cedf660e4d7c7537b0919d5f60f06ebb243) uses MIT licensing. Its sample streams from a configurable media server and measures playback quality.

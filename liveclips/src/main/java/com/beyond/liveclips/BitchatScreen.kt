@@ -42,7 +42,7 @@ import java.util.UUID
 
 @SuppressLint("MissingPermission")
 @Composable
-internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> Unit) {
+internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> Unit, creators: ClipCreators) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("") }
@@ -235,7 +235,11 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
                 sending = true
                 action {
                     try {
-                        link.offer(chosen, store.credit(chosen))
+                        val credit = store.credit(chosen)
+                        val sharedCredit = if (chosen.parentFile == store.clips || chosen.parentFile == store.received) {
+                            creators.sharingCredit(chosen, credit)
+                        } else credit
+                        link.offer(chosen, sharedCredit)
                         file = null
                         onClipOffered()
                     } finally {
@@ -255,7 +259,8 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
     offer?.let { incoming ->
         HorizontalDivider()
         Text("Incoming file: ${incoming.name} · ${incoming.size / 1024} KB")
-        if (incoming.credit.isNotBlank()) Text(incoming.credit)
+        val credit = ClipCreators.visibleCredit(incoming.credit)
+        if (credit.isNotBlank()) Text(credit)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { action { link.decide(true) } }) { Text("Accept") }
             OutlinedButton(onClick = { action { link.decide(false) } }) { Text("Decline") }
@@ -267,8 +272,7 @@ internal fun BitchatScreen(store: ClipStore, clip: File?, onClipOffered: () -> U
         received.forEach { saved ->
             TextButton(onClick = {
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", saved)
-                val credit = File(saved.parentFile, "${saved.name}.credit.txt")
-                    .takeIf { it.isFile }?.readText().orEmpty()
+                val credit = store.credit(saved)
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = context.contentResolver.getType(uri) ?: "application/octet-stream"
                     putExtra(Intent.EXTRA_STREAM, uri)

@@ -98,8 +98,13 @@ internal class ClipStore(private val context: Context) {
         file.isFile && file.extension == "mp4"
     }.orEmpty().sortedByDescending { it.lastModified() }
 
-    fun credit(file: File): String = File(clips, "${file.nameWithoutExtension}.txt")
-        .takeIf { it.isFile }?.readText().orEmpty()
+    fun listReceivedClips(): List<File> = received.listFiles { file ->
+        file.isFile && file.extension.equals("mp4", ignoreCase = true)
+    }.orEmpty().sortedByDescending { it.lastModified() }
+
+    fun credit(file: File): String = if (file.parentFile == received) {
+        ClipCreators.visibleCredit(ClipCreators.readCredit(file))
+    } else File(clips, "${file.nameWithoutExtension}.txt").takeIf { it.isFile }?.readText().orEmpty()
 
     fun commitClip(temp: File, attribution: String): File {
         val name = "BeyondLiveClips_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"

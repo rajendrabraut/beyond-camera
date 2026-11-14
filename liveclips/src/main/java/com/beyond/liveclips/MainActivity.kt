@@ -68,7 +68,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 private enum class Page(val title: String, val icon: String) {
-    CREATE("Create", "+"), MUSIC("Music", "♫"), CLIPS("Clips", "▶"), BITCHAT("Bitchat", "⇄")
+    CREATE("Create", "+"), MUSIC("Music", "♫"), CLIPS("Clips", "▶"), STREAM("Stream", "◉"), BITCHAT("Bitchat", "⇄")
 }
 
 class MainActivity : ComponentActivity() {
@@ -117,6 +117,7 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
     val app = context.applicationContext
     val scope = rememberCoroutineScope()
     val store = remember { ClipStore(app) }
+    val creators = remember { ClipCreators(app, store.received) }
     val library = remember { MusicLibrary(app) }
     val engine = remember { ClipEngine(app) }
     val recorder = remember { ClipRecorder() }
@@ -136,13 +137,16 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
     var recording by remember { mutableStateOf(false) }
     var musicPlaying by remember { mutableStateOf<String?>(null) }
     var sendFile by remember { mutableStateOf<File?>(null) }
+    var streamFile by remember { mutableStateOf<File?>(null) }
+    val feedClips = remember(clips, page) { clips + store.listReceivedClips() }
     var compact by remember { mutableStateOf(false) }
     val song = tracks.find { it.id == draft.songId }
     val songFile = song?.let { library.file(it) }
     val busy = working || recording
 
-    BackHandler(enabled = page == Page.BITCHAT && !openBitchat) {
+    BackHandler(enabled = (page == Page.BITCHAT && !openBitchat) || page == Page.STREAM) {
         sendFile = null
+        streamFile = null
         page = Page.CLIPS
     }
 
@@ -402,11 +406,12 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
     }) { padding ->
         if (page == Page.CLIPS) {
             ClipFeed(
-                clips, selectedClip, store, status,
+                feedClips, selectedClip, store, creators, status,
                 onCreate = { page = Page.CREATE },
                 onSelect = { selectedClip = it },
                 onShare = ::share,
                 onNearby = { sendFile = it; page = Page.BITCHAT },
+                onStream = { streamFile = it; page = Page.STREAM },
                 onGallery = { file ->
                     if (!working) {
                         working = true
@@ -591,7 +596,8 @@ private fun LiveClips(sharedVideo: Uri?, openBitchat: Boolean, onSharedVideoHand
                     }
                 }
                 Page.CLIPS -> Unit
-                Page.BITCHAT -> BitchatScreen(store, sendFile, { sendFile = null })
+                Page.STREAM -> StreamScreen(streamFile)
+                Page.BITCHAT -> BitchatScreen(store, sendFile, { sendFile = null }, creators)
             }
         }
     }
