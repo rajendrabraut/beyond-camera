@@ -5,6 +5,7 @@ import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
+import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -65,6 +66,7 @@ internal class ClipEngine(private val context: Context) {
             if (edit.monochrome) add(RgbFilter.createGrayscaleFilter())
             if (edit.caption.isNotBlank()) {
                 val text = SpannableString(edit.caption.trim().chunked(25).joinToString("\n"))
+                text.setSpan(AbsoluteSizeSpan(edit.height / 40), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(ForegroundColorSpan(android.graphics.Color.WHITE), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(BackgroundColorSpan(0x99000000.toInt()), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 add(OverlayEffect(listOf(TextOverlay.createStaticTextOverlay(text))))
