@@ -489,7 +489,7 @@ fun CameraScreen(
             scope.launch {
                 val uri = withContext(Dispatchers.IO) { running.finish() }
                 operationBusy = false
-                    CaptureDiagnostics.video(app, if (uri != null) "Time-lapse / saved" else "Time-lapse / save failed", 0)
+                CaptureDiagnostics.video(app, if (uri != null) "Time-lapse / saved" else "Time-lapse / save failed", 0)
                 if (uri != null) last = MediaItem(uri, true) else app.toast("Too short: keep recording a little longer")
             }
         } else if (engine.bound && !operationBusy) {
