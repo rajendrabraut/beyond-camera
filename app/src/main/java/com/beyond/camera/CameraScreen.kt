@@ -322,7 +322,10 @@ fun CameraScreen(
     suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
         if (!engine.photoReady || operationBusy) return false
         val captureStarted = SystemClock.elapsedRealtime()
-        val instant = mode == CameraMode.PHOTO && flash == FlashSetting.OFF
+        // Photo, Pro and Portrait save an instant frame at the tap, then swap in the full-resolution still.
+        // Flash, Night and the phone maker's extensions take the full still directly.
+        val instant = flash == FlashSetting.OFF && !engine.usingExtension &&
+            (mode == CameraMode.PHOTO || mode == CameraMode.PRO || mode == CameraMode.PORTRAIT)
         val snapshot = if (instant) engine.photoSnapshot() else null
         val still = snapshot == null
         if (still && capturing) return false

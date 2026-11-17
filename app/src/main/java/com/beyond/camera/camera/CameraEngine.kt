@@ -168,10 +168,15 @@ class CameraEngine(private val context: Context) {
 
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
-                    // Standard Photo uses software HDR after capture so OEM HDR can't delay the shutter.
-                    val captureMode = when {
-                        cfg.mode == CameraMode.PHOTO -> ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
-                        else -> ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                    // The shutter feels instant through the frame buffer, and the full-resolution still
+                    // arrives in the background, so the still can use the best quality mode. Zero shutter
+                    // lag (where supported) also makes the still match the moment of the tap.
+                    val zsl = !extensionOn && cfg.mode != CameraMode.NIGHT &&
+                        runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
+                    val captureMode = if (zsl) {
+                        ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
+                    } else {
+                        ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     }
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(captureMode)
@@ -185,14 +190,19 @@ class CameraEngine(private val context: Context) {
                         .build()
                     imageCapture = capture
                     cases.add(capture)
-                    if (cfg.mode == CameraMode.PHOTO) {
+                    // Instant capture buffer for Photo, Pro and Portrait. Not with the phone maker's
+                    // extensions (they don't support frame analysis) or Night (needs merged frames).
+                    val instantModes = cfg.mode == CameraMode.PHOTO ||
+                        ((cfg.mode == CameraMode.PRO || cfg.mode == CameraMode.PORTRAIT) && !extensionOn)
+                    if (instantModes) {
                         val info = Camera2CameraInfo.from(p.getCameraInfo(base))
                         val elapsedClock = info.getCameraCharacteristic(
                             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE
                         ) == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
                         val frames = PhotoFrames(elapsedClock)
                         photoFrames = frames
-                        val scan = cfg.scanInPhoto && base == CameraSelector.DEFAULT_BACK_CAMERA
+                        val scan = cfg.mode == CameraMode.PHOTO && cfg.scanInPhoto &&
+                            base == CameraSelector.DEFAULT_BACK_CAMERA
                         optionalAnalysis = buildAnalysis(aspect, Size(1920, 1440), ImageAnalysis.Analyzer { image ->
                             try {
                                 frames.update(image)
