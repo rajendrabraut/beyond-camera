@@ -14,6 +14,9 @@ enum class CameraMode(val label: String, val isVideo: Boolean) {
     CLIP("Clip", true)
 }
 
+/** What the live view says about the light, used to pick processing automatically. */
+enum class Scene { NORMAL, LOW_LIGHT, HIGH_CONTRAST }
+
 data class BindConfig(
     val mode: CameraMode,
     val front: Boolean,
