@@ -53,6 +53,15 @@ Each tap saves the original JPEG to the gallery. The app then applies any finish
 time stamp in the background and replaces that same gallery item. Hold the shutter for a continuous
 burst of originals by default. Pro and CameraX Extensions save the camera's JPEG directly.
 
+## Scene-aware capture
+
+The live view tracks ISO, exposure and the share of blown-out and crushed areas, and sorts the
+scene into normal, low light or high contrast (with hysteresis, so it doesn't flicker). With Smart
+processing on, Photo merges extra frames in the background in dim light and uses the HDR look in
+high-contrast scenes; manual HDR always wins. A small teal icon shows which is active. In the dark,
+auto-exposure may lower the frame rate (it picks the lowest range that tops out at 30 fps) for
+brighter photos and video. This is skipped with manual Pro exposure and the phone maker's extensions.
+
 ## Other features
 
 - Pinch, quick stops (1x / 2x / 4x …) and a fine slider for zoom; tap to focus
@@ -137,9 +146,9 @@ The iOS GitHub workflow compiles the device build and launches the simulator bui
 
 ## Versioning
 
-Four-part Android versions use `a.b.c.d` (current: `1.0.1.0`).
-The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.0.1.0` = `10001000`).
-The iOS marketing version is `1.0.1`.
+Four-part Android versions use `a.b.c.d` (current: `1.1.0.0`).
+The Android version code is `a*10000000 + b*100000 + c*1000 + d` (`1.1.0.0` = `11000000`).
+The iOS marketing version is `1.1.0`.
 
 ## Tech stack
 
