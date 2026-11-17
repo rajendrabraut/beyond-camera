@@ -47,19 +47,21 @@ object ProcessingQueue {
         context: Context,
         uri: Uri,
         rotation: Int,
-        edit: PhotoProcessor.Edit,
+        edit: PhotoProcessor.Edit?,
         location: Location?,
-        extraFrames: List<File>
+        extraFrames: List<File>,
+        fullRes: File? = null
     ) {
         jobs.trySend {
             val replaced = try {
-                PhotoProcessor.finish(context, uri, rotation, edit, location, extraFrames)
+                PhotoProcessor.finish(context, uri, rotation, edit, location, extraFrames, fullRes)
             } catch (_: Exception) {
                 false
             } catch (_: OutOfMemoryError) {
                 false
             } finally {
                 extraFrames.forEach { it.delete() }
+                fullRes?.delete()
             }
             if (replaced) {
                 val id = uri.lastPathSegment ?: return@trySend

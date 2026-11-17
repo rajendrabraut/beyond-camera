@@ -135,6 +135,25 @@ jobs:
           "$bt/aapt2" dump packagename dist/*-release.apk | grep -Fx 'com.beyond.camera'
           "$bt/aapt2" dump packagename dist/*-diagnostics.apk | grep -Fx 'com.beyond.camera.diagnostics'
 
+      - name: Release build must stay offline
+        run: |
+          set -o pipefail
+          bt="$ANDROID_HOME/build-tools/36.0.0"
+          perms="$("$bt/aapt2" dump permissions dist/*-release.apk)"
+          echo "$perms"
+          for p in android.permission.INTERNET android.permission.ACCESS_NETWORK_STATE; do
+            if echo "$perms" | grep -q "$p"; then
+              echo "::error::The release APK requests $p. Beyond Camera must stay offline."
+              exit 1
+            fi
+          done
+          # The .aab is what Play would install; check its merged manifest too.
+          manifest=app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml
+          if [ -f "$manifest" ] && grep -qE 'android.permission.(INTERNET|ACCESS_NETWORK_STATE)"' "$manifest"; then
+            echo "::error::The release bundle's manifest requests network access."
+            exit 1
+          fi
+
       - name: Verify the published signing certificate
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

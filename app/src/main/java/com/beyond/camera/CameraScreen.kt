@@ -107,6 +107,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.hypot
@@ -131,6 +132,9 @@ private val photoEncoder = Dispatchers.Default.limitedParallelism(1)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 private val photoStorage = Dispatchers.IO.limitedParallelism(2)
+
+// Full-resolution stills fetched after instant saves; beyond this, rapid taps keep the instant photo.
+private const val MAX_PENDING_STILLS = 6
 
 private class Live {
     var recording: Recording? = null
@@ -172,6 +176,7 @@ fun CameraScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val live = remember { Live() }
     val scanPaused = remember { AtomicBoolean(false) }
+    val pendingStills = remember { AtomicInteger(0) }
     val lastScanAt = remember { AtomicLong(0L) }
 
     var mode by remember { mutableStateOf(Session.mode ?: CameraMode.PHOTO) }
@@ -400,7 +405,29 @@ fun CameraScreen(
                 lastPhotoOrder = order
                 last = MediaItem(uri, false)
             }
-            if (edit == null) return true
+
+            // The instant save used a preview-sized frame (about 3 MP). Take the sensor's full-resolution
+            // still now and swap it into the same gallery file in the background. Burst shots stay instant.
+            var fullRes: File? = null
+            var stillRotation = frame.rotation
+            if (snapshot != null && !originalOnly && pendingStills.incrementAndGet() <= MAX_PENDING_STILLS) {
+                try {
+                    val still = engine.capture()
+                    val file = MediaStoreSaver.tempFile(app, "jpg")
+                    withContext(Dispatchers.IO) { file.writeBytes(still.jpeg) }
+                    fullRes = file
+                    stillRotation = still.rotation
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the instant photo.
+                } finally {
+                    pendingStills.decrementAndGet()
+                }
+            } else if (snapshot != null && !originalOnly) {
+                pendingStills.decrementAndGet()
+            }
+            if (edit == null && fullRes == null) return true
 
             // Only Night needs extra frames. Put them in cache so queued edits retain no JPEGs.
             val extraFrames = mutableListOf<File>()
@@ -414,14 +441,17 @@ fun CameraScreen(
                         withContext(Dispatchers.IO) { file.writeBytes(extra.jpeg) }
                     }
                 }
-                ProcessingQueue.submit(app, uri, frame.rotation, edit, location, extraFrames)
+                ProcessingQueue.submit(app, uri, stillRotation, edit, location, extraFrames, fullRes)
                 queued = true
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 // The original is already in the gallery.
             } finally {
-                if (!queued) extraFrames.forEach { it.delete() }
+                if (!queued) {
+                    extraFrames.forEach { it.delete() }
+                    fullRes?.delete()
+                }
             }
             return true
         } catch (e: CancellationException) {

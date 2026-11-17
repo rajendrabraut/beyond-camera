@@ -85,16 +85,27 @@ object PhotoProcessor {
         }
     }
 
-    /** Renders a complete JPEG in cache before replacing the published original. */
+    /**
+     * Renders a complete JPEG in cache before replacing the published original.
+     *
+     * [fullRes] is the full-resolution still taken right after an instant (preview-sized) save. When given,
+     * it becomes the source instead of the published file, and [rotation] must be the still's rotation.
+     * With no [edit], the still simply replaces the instant photo.
+     */
     fun finish(
         context: Context,
         uri: Uri,
         rotation: Int,
-        edit: Edit,
+        edit: Edit?,
         location: Location?,
-        extraFrames: List<File>
+        extraFrames: List<File>,
+        fullRes: File? = null
     ): Boolean {
-        val source = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return false
+        val original = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return false
+        val source = fullRes?.readBytes() ?: original
+        if (edit == null || !edit.needed) {
+            return if (fullRes == null) false else replaceWithStill(context, uri, source, rotation, location, original)
+        }
         val upright = edit.portrait || edit.square || edit.stampAt != null
         var bitmap = when {
             edit.portrait -> decodeUpright(Frame(source, rotation), 3264)
@@ -123,9 +134,38 @@ object PhotoProcessor {
                 return false
             }
             writeExif(output, source, if (upright) 0 else rotation, location)
-            return MediaStoreSaver.replacePhoto(context, uri, output, source)
+            return MediaStoreSaver.replacePhoto(context, uri, output, original)
         } finally {
             bitmap.recycle()
+            output.delete()
+        }
+    }
+
+    /** Swaps the instant photo for the camera's full-resolution JPEG, with orientation and location. */
+    private fun replaceWithStill(
+        context: Context,
+        uri: Uri,
+        still: ByteArray,
+        rotation: Int,
+        location: Location?,
+        original: ByteArray
+    ): Boolean {
+        val output = MediaStoreSaver.tempFile(context, "jpg")
+        return try {
+            output.writeBytes(still)
+            runCatching {
+                val exif = ExifInterface(output)
+                val needsOrientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED
+                ) == ExifInterface.ORIENTATION_UNDEFINED && rotation != 0
+                if (needsOrientation) exif.rotate(rotation)
+                if (location != null) exif.setGpsInfo(location)
+                if (needsOrientation || location != null) exif.saveAttributes()
+            }
+            MediaStoreSaver.replacePhoto(context, uri, output, original)
+        } catch (_: Exception) {
+            false
+        } finally {
             output.delete()
         }
     }
