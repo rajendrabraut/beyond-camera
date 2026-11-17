@@ -8,6 +8,9 @@ object EngineTuning {
     /** Everyday photo: gentle shadow lift, held highlights, light colour-noise cleanup. */
     val photo = Params(Kind.DENOISE, shadows = 0.22f, highlights = 0.3f, chroma = 0.45f, sharpen = 0.25f, saturation = 1.04f)
 
+    /** Photo in dim light (chosen automatically): up to 3 merged frames, a little brightening, stronger cleanup. */
+    val lowLight = Params(Kind.DENOISE, shadows = 0.32f, highlights = 0.35f, chroma = 0.75f, sharpen = 0.3f, saturation = 1.05f, gain = 1.15f)
+
     /** Night: 3 merged frames, strongest cleanup, highlights compressed rather than clipped. */
     val night = Params(Kind.DENOISE, shadows = 0.4f, highlights = 0.45f, chroma = 0.85f, sharpen = 0.3f, saturation = 1.08f, gain = 1.3f)
 

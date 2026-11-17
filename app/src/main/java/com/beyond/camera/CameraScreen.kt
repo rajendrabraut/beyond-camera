@@ -44,6 +44,8 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.FlashlightOff
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.HdrAuto
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.QrCode2
@@ -87,6 +89,7 @@ import com.beyond.camera.camera.PhotoProcessor
 import com.beyond.camera.diagnostics.CaptureDiagnostics
 import com.beyond.camera.diagnostics.PhotoTiming
 import com.beyond.camera.camera.ProState
+import com.beyond.camera.camera.Scene
 import com.beyond.camera.camera.TimelapseRecorder
 import com.beyond.camera.qr.QrDecoder
 import com.beyond.camera.qr.QrHistory
@@ -107,6 +110,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.hypot
@@ -131,6 +135,9 @@ private val photoEncoder = Dispatchers.Default.limitedParallelism(1)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 private val photoStorage = Dispatchers.IO.limitedParallelism(2)
+
+// Full-resolution stills fetched after instant saves; beyond this, rapid taps keep the instant photo.
+private const val MAX_PENDING_STILLS = 6
 
 private class Live {
     var recording: Recording? = null
@@ -172,6 +179,7 @@ fun CameraScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val live = remember { Live() }
     val scanPaused = remember { AtomicBoolean(false) }
+    val pendingStills = remember { AtomicInteger(0) }
     val lastScanAt = remember { AtomicLong(0L) }
 
     var mode by remember { mutableStateOf(Session.mode ?: CameraMode.PHOTO) }
@@ -317,7 +325,10 @@ fun CameraScreen(
     suspend fun capturePhoto(originalOnly: Boolean = false): Boolean {
         if (!engine.photoReady || operationBusy) return false
         val captureStarted = SystemClock.elapsedRealtime()
-        val instant = mode == CameraMode.PHOTO && flash == FlashSetting.OFF
+        // Photo, Pro and Portrait save an instant frame at the tap, then swap in the full-resolution still.
+        // Flash, Night and the phone maker's extensions take the full still directly.
+        val instant = flash == FlashSetting.OFF && !engine.usingExtension &&
+            (mode == CameraMode.PHOTO || mode == CameraMode.PRO || mode == CameraMode.PORTRAIT)
         val snapshot = if (instant) engine.photoSnapshot() else null
         val still = snapshot == null
         if (still && capturing) return false
@@ -331,6 +342,11 @@ fun CameraScreen(
         val saveLocation = settings.saveLocation
         val jpegQuality = settings.pictureQuality.jpeg
         val night = mode == CameraMode.NIGHT && !engine.usingExtension
+        // Scene-aware Photo: in dim light, merge extra full-resolution shots in the background (no waiting);
+        // in high-contrast light, use the HDR look. A manual HDR choice always wins.
+        val smartPhoto = mode == CameraMode.PHOTO && settings.smartProcessing && !settings.hdr && !originalOnly
+        val autoNight = smartPhoto && flash == FlashSetting.OFF && engine.scene == Scene.LOW_LIGHT
+        val autoHdr = smartPhoto && engine.scene == Scene.HIGH_CONTRAST
         val edit = if (originalOnly || engine.usingExtension || mode == CameraMode.PRO) {
             null
         } else {
@@ -338,6 +354,8 @@ fun CameraScreen(
                 night -> EngineTuning.night
                 mode == CameraMode.PORTRAIT -> EngineTuning.portrait.takeIf { settings.smartProcessing }
                 mode == CameraMode.PHOTO && settings.hdr -> EngineTuning.hdr
+                autoNight -> EngineTuning.lowLight
+                autoHdr -> EngineTuning.hdr
                 mode == CameraMode.PHOTO && settings.enhancedZoom && engine.zoomRatio >= 1.95f -> EngineTuning.zoom
                 settings.smartProcessing -> EngineTuning.photo
                 else -> null
@@ -400,9 +418,31 @@ fun CameraScreen(
                 lastPhotoOrder = order
                 last = MediaItem(uri, false)
             }
-            if (edit == null) return true
 
-            // Only Night needs extra frames. Put them in cache so queued edits retain no JPEGs.
+            // The instant save used a preview-sized frame (about 3 MP). Take the sensor's full-resolution
+            // still now and swap it into the same gallery file in the background. Burst shots stay instant.
+            var fullRes: File? = null
+            var stillRotation = frame.rotation
+            if (snapshot != null && !originalOnly && pendingStills.incrementAndGet() <= MAX_PENDING_STILLS) {
+                try {
+                    val still = engine.capture()
+                    val file = MediaStoreSaver.tempFile(app, "jpg")
+                    withContext(Dispatchers.IO) { file.writeBytes(still.jpeg) }
+                    fullRes = file
+                    stillRotation = still.rotation
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the instant photo.
+                } finally {
+                    pendingStills.decrementAndGet()
+                }
+            } else if (snapshot != null && !originalOnly) {
+                pendingStills.decrementAndGet()
+            }
+            if (edit == null && fullRes == null) return true
+
+            // Night, and Photo in dim light, merge extra frames. Put them in cache so queued edits retain no JPEGs.
             val extraFrames = mutableListOf<File>()
             var queued = false
             try {
@@ -413,15 +453,32 @@ fun CameraScreen(
                         extraFrames.add(file)
                         withContext(Dispatchers.IO) { file.writeBytes(extra.jpeg) }
                     }
+                } else if (autoNight) {
+                    // Taken after the instant save, so nothing waits. Fewer frames still merge fine.
+                    try {
+                        repeat(2) {
+                            val extra = engine.capture()
+                            val file = MediaStoreSaver.tempFile(app, "jpg")
+                            withContext(Dispatchers.IO) { file.writeBytes(extra.jpeg) }
+                            extraFrames.add(file)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Merge whatever was captured.
+                    }
                 }
-                ProcessingQueue.submit(app, uri, frame.rotation, edit, location, extraFrames)
+                ProcessingQueue.submit(app, uri, stillRotation, edit, location, extraFrames, fullRes)
                 queued = true
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 // The original is already in the gallery.
             } finally {
-                if (!queued) extraFrames.forEach { it.delete() }
+                if (!queued) {
+                    extraFrames.forEach { it.delete() }
+                    fullRes?.delete()
+                }
             }
             return true
         } catch (e: CancellationException) {
@@ -733,6 +790,14 @@ fun CameraScreen(
             }
             if (mode == CameraMode.PHOTO) {
                 TextPill("HDR", settings.hdr) { if (inFlight == 0) settings.hdr = !settings.hdr }
+                // Quiet indicator of what Smart processing will do for the current light. Icon only.
+                if (settings.smartProcessing && !settings.hdr) {
+                    when (engine.scene) {
+                        Scene.LOW_LIGHT -> SceneBadge(Icons.Filled.NightsStay, "Low light: extra shots are merged")
+                        Scene.HIGH_CONTRAST -> SceneBadge(Icons.Filled.HdrAuto, "High contrast: HDR look applied")
+                        Scene.NORMAL -> Unit
+                    }
+                }
             }
             if (photoMode && settings.timerSeconds > 0) TextPill("${settings.timerSeconds}s", false)
             Spacer(Modifier.weight(1f))
@@ -872,6 +937,25 @@ fun CameraScreen(
                 scanPaused.set(false)
             }
         }
+    }
+}
+
+/** Small teal icon showing what Smart processing is doing for the current light. Not clickable. */
+@Composable
+private fun SceneBadge(icon: ImageVector, description: String) {
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Ui.Chip),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = Ui.Accent,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 

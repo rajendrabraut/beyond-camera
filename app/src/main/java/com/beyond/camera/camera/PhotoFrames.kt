@@ -20,13 +20,14 @@ internal class PhotoFrames(private val sensorUsesElapsedClock: Boolean) {
         val quality: FrameQuality
     )
 
-    fun update(image: ImageProxy) {
+    /** Buffers the frame and returns its brightness/detail measure (used for scene detection). */
+    fun update(image: ImageProxy): FrameQuality? {
         val arrivalNs = SystemClock.elapsedRealtimeNanos()
         val sensorNs = image.imageInfo.timestamp
         val timestampNs = if (sensorUsesElapsedClock && sensorNs in 1..arrivalNs) sensorNs else arrivalNs
         val width = image.width
         val height = image.height
-        if (width % 2 != 0 || height % 2 != 0) return
+        if (width % 2 != 0 || height % 2 != 0) return null
         val byteCount = width * height * 3 / 2
         if (staging.size != byteCount) staging = ByteArray(byteCount)
         val pixels = staging
@@ -63,6 +64,7 @@ internal class PhotoFrames(private val sensorUsesElapsedClock: Boolean) {
             staging = if (history.size == 3) history.removeFirst().snapshot.pixels else ByteArray(0)
             history.addLast(BufferedFrame(frame, timestampNs, quality))
         }
+        return quality
     }
 
     fun snapshot(tapNs: Long): Snapshot? = synchronized(lock) {

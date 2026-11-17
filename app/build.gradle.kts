@@ -26,12 +26,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10001000
-        versionName = "1.0.1.0"
-
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-        }
+        versionCode = 10001001
+        versionName = "1.0.1.1"
     }
 
     signingConfigs {
@@ -57,9 +53,13 @@ android {
         debug {
             applicationIdSuffix = ".diagnostics"
             resValue("string", "app_name", "Beyond Camera Diagnostics")
+            // Test build: also runs on x86 emulators.
+            ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
         }
         release {
             resValue("string", "app_name", "Beyond Camera")
+            // Phones only: x86 copies of the native libraries would double the APK size.
+            ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")

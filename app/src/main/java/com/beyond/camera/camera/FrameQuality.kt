@@ -21,6 +21,12 @@ internal class FrameQuality private constructor(
     fun isClearlySharperThan(other: FrameQuality): Boolean =
         detail > other.detail + maxOf(samples.size, other.detail / 4)
 
+    /** Share of the frame that is blown out (near white). */
+    fun clippedShare(): Float = samples.count { it >= 240 }.toFloat() / samples.size.coerceAtLeast(1)
+
+    /** Share of the frame that is crushed (near black). */
+    fun shadowShare(): Float = samples.count { it <= 24 }.toFloat() / samples.size.coerceAtLeast(1)
+
     companion object {
         private const val COLUMNS = 24
         private const val ROWS = 18

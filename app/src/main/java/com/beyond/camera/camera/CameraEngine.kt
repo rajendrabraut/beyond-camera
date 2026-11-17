@@ -2,9 +2,14 @@ package com.beyond.camera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.os.Handler
+import android.os.Looper
 import android.location.Location
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -12,6 +17,7 @@ import android.util.Range
 import android.util.Size
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
@@ -111,6 +117,67 @@ class CameraEngine(private val context: Context) {
     var error by mutableStateOf<String?>(null)
         private set
 
+    // ---- Scene awareness ------------------------------------------------------------------------
+    // The live view reports how hard the camera is working (ISO, exposure time) and how much of the
+    // frame is blown out or crushed. Capture uses this to pick low-light merging or HDR automatically.
+
+    /** Current scene, updated a few times a second with hysteresis so it doesn't flicker. */
+    var scene by mutableStateOf(Scene.NORMAL)
+        private set
+
+    @Volatile private var liveIso = 0
+    @Volatile private var liveExposureNs = 0L
+    @Volatile private var liveClipped = 0f
+    @Volatile private var liveShadows = 0f
+    @Volatile private var sceneCheckedAt = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Lowest AE frame-rate range topping out at 30 fps: lets exposure lengthen in the dark. */
+    private var lowLightFps: Range<Int>? = null
+
+    private val sceneCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { liveIso = it }
+            result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { liveExposureNs = it }
+            updateScene()
+        }
+    }
+
+    private fun noteTones(quality: FrameQuality) {
+        liveClipped = quality.clippedShare()
+        liveShadows = quality.shadowShare()
+        updateScene()
+    }
+
+    private fun updateScene() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - sceneCheckedAt < 400) return
+        sceneCheckedAt = now
+        val iso = liveIso
+        val exposure = liveExposureNs
+        val current = scene
+        val dark = if (current == Scene.LOW_LIGHT) {
+            iso >= 600 || exposure >= 30_000_000L
+        } else {
+            iso >= 800 || exposure >= 40_000_000L
+        }
+        val contrast = if (current == Scene.HIGH_CONTRAST) {
+            liveClipped >= 0.01f && liveShadows >= 0.05f
+        } else {
+            liveClipped >= 0.02f && liveShadows >= 0.08f
+        }
+        val next = when {
+            dark -> Scene.LOW_LIGHT
+            contrast -> Scene.HIGH_CONTRAST
+            else -> Scene.NORMAL
+        }
+        if (next != current) mainHandler.post { scene = next }
+    }
+
     suspend fun bind(
         owner: LifecycleOwner,
         previewView: PreviewView,
@@ -158,9 +225,16 @@ class CameraEngine(private val context: Context) {
 
             val ratio = if (cfg.wide) AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3
             val aspect = AspectRatioStrategy(ratio, AspectRatioStrategy.FALLBACK_RULE_AUTO)
-            val preview = Preview.Builder()
+            val previewBuilder = Preview.Builder()
                 .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(aspect).build())
-                .build()
+            // Read ISO / exposure from the live view (not available with the phone maker's extensions).
+            if (!extensionOn) Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(sceneCallback)
+            val preview = previewBuilder.build()
+            liveIso = 0
+            liveExposureNs = 0L
+            liveClipped = 0f
+            liveShadows = 0f
+            scene = Scene.NORMAL
 
             val cases = ArrayList<UseCase>()
             cases.add(preview)
@@ -168,10 +242,15 @@ class CameraEngine(private val context: Context) {
 
             when (cfg.mode) {
                 CameraMode.PHOTO, CameraMode.PRO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
-                    // Standard Photo uses software HDR after capture so OEM HDR can't delay the shutter.
-                    val captureMode = when {
-                        cfg.mode == CameraMode.PHOTO -> ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
-                        else -> ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                    // The shutter feels instant through the frame buffer, and the full-resolution still
+                    // arrives in the background, so the still can use the best quality mode. Zero shutter
+                    // lag (where supported) also makes the still match the moment of the tap.
+                    val zsl = !extensionOn && cfg.mode != CameraMode.NIGHT &&
+                        runCatching { p.getCameraInfo(selector).isZslSupported }.getOrDefault(false)
+                    val captureMode = if (zsl) {
+                        ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
+                    } else {
+                        ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
                     }
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(captureMode)
@@ -185,17 +264,22 @@ class CameraEngine(private val context: Context) {
                         .build()
                     imageCapture = capture
                     cases.add(capture)
-                    if (cfg.mode == CameraMode.PHOTO) {
+                    // Instant capture buffer for Photo, Pro and Portrait. Not with the phone maker's
+                    // extensions (they don't support frame analysis) or Night (needs merged frames).
+                    val instantModes = cfg.mode == CameraMode.PHOTO ||
+                        ((cfg.mode == CameraMode.PRO || cfg.mode == CameraMode.PORTRAIT) && !extensionOn)
+                    if (instantModes) {
                         val info = Camera2CameraInfo.from(p.getCameraInfo(base))
                         val elapsedClock = info.getCameraCharacteristic(
                             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE
                         ) == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
                         val frames = PhotoFrames(elapsedClock)
                         photoFrames = frames
-                        val scan = cfg.scanInPhoto && base == CameraSelector.DEFAULT_BACK_CAMERA
+                        val scan = cfg.mode == CameraMode.PHOTO && cfg.scanInPhoto &&
+                            base == CameraSelector.DEFAULT_BACK_CAMERA
                         optionalAnalysis = buildAnalysis(aspect, Size(1920, 1440), ImageAnalysis.Analyzer { image ->
                             try {
-                                frames.update(image)
+                                frames.update(image)?.let { noteTones(it) }
                             } catch (_: RuntimeException) {
                                 // Some vendor buffers are unavailable during camera reconfiguration.
                             } finally {
@@ -252,6 +336,15 @@ class CameraEngine(private val context: Context) {
             hasFlash = cam.cameraInfo.hasFlashUnit()
             cam.cameraInfo.zoomState.also { zoomLiveData = it }.observe(owner, zoomObserver)
             proCaps = readCaps(cam, extensionOn)
+            // In the dark, let auto-exposure drop to a lower frame rate (longer exposure) instead of
+            // cranking ISO: brighter, cleaner preview, instant photos and video. Bright scenes stay at 30 fps.
+            lowLightFps = if (extensionOn) null else runCatching {
+                Camera2CameraInfo.from(cam.cameraInfo)
+                    .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?.filter { it.upper in 24..30 && it.lower < it.upper }
+                    ?.minByOrNull { it.lower }
+                    ?.takeIf { it.lower <= 20 }
+            }.getOrNull()
             videoReady = videoCapture != null
             photoReady = imageCapture != null
             bound = true
@@ -348,6 +441,10 @@ class CameraEngine(private val context: Context) {
                     AntiBanding.OFF -> CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_OFF
                 }
             )
+            val manualExposure = pro != null && (pro.iso != null || pro.shutterNs != null)
+            lowLightFps?.let { range ->
+                if (!manualExposure) options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+            }
             val caps = proCaps
             if (pro != null && caps != null) {
                 if (pro.awb != CameraMetadata.CONTROL_AWB_MODE_AUTO && pro.awb in caps.awbModes) {
