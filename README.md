@@ -14,6 +14,7 @@ and CameraX.
 | Video | 720p / 1080p with stabilisation when the phone supports it |
 | Clip | Short video that stops by itself after 10 / 15 / 30 / 60 seconds |
 | Time-lapse | One frame every 0.5 – 5 seconds, encoded as a 30 fps video |
+| Dual | Front and back cameras in one video (picture-in-picture). Shown only on phones that can run both cameras at once (Android 11+ and supporting hardware) |
 | Scan | QR codes and barcodes, live or from a picture already on the phone |
 
 ## Image engine

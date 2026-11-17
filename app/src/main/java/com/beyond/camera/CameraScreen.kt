@@ -616,7 +616,7 @@ fun CameraScreen(
                 countdown = null
             }
 
-            mode == CameraMode.VIDEO || mode == CameraMode.CLIP -> toggleVideo()
+            mode == CameraMode.VIDEO || mode == CameraMode.CLIP || mode == CameraMode.DUAL -> toggleVideo()
             mode == CameraMode.TIMELAPSE -> toggleTimelapse()
             mode == CameraMode.SCAN -> Unit
             else -> shoot(settings.timerSeconds)
@@ -661,6 +661,11 @@ fun CameraScreen(
     }
 
     // Hold-to-record: start as soon as the video session is ready.
+    // A remembered "Dual" mode on a phone that can't run both cameras falls back to normal video.
+    LaunchedEffect(mode, engine.error, engine.dualSupported) {
+        if (mode == CameraMode.DUAL && engine.error != null && !engine.dualSupported) selectMode(CameraMode.VIDEO)
+    }
+
     LaunchedEffect(autoRecord, engine.videoReady) {
         if (autoRecord && engine.videoReady && mode == CameraMode.VIDEO) {
             autoRecord = false
@@ -876,7 +881,11 @@ fun CameraScreen(
                 Spacer(Modifier.height(10.dp))
             }
 
-            ModeStrip(mode, enabled = canSwitchSession) { selectMode(it) }
+            // "Dual" (front + back video) only appears on phones that can run both cameras at once.
+            val modes = remember(engine.dualSupported) {
+                CameraMode.entries.filter { it != CameraMode.DUAL || engine.dualSupported }
+            }
+            ModeStrip(mode, enabled = canSwitchSession, modes = modes) { selectMode(it) }
             Spacer(Modifier.height(14.dp))
 
             Row(

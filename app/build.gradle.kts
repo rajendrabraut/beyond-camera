@@ -26,8 +26,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // a.b.c.d -> a*10000000 + b*100000 + c*1000 + d (always above the 1.0.0.2 build, code 1010001)
-        versionCode = 10001001
-        versionName = "1.0.1.1"
+        versionCode = 10001002
+        versionName = "1.0.1.2"
     }
 
     signingConfigs {

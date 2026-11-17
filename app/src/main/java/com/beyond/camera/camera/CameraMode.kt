@@ -11,7 +11,10 @@ enum class CameraMode(val label: String, val isVideo: Boolean) {
     PORTRAIT("Portrait", false),
     NIGHT("Night", false),
     TIMELAPSE("Time-lapse", true),
-    CLIP("Clip", true)
+    CLIP("Clip", true),
+
+    /** Front and back cameras recorded together (picture-in-picture). Only on phones that support it. */
+    DUAL("Dual", true)
 }
 
 /** What the live view says about the light, used to pick processing automatically. */

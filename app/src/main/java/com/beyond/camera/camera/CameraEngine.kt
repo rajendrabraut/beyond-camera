@@ -23,6 +23,8 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.CompositionSettings
+import androidx.camera.core.ConcurrentCamera
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -30,6 +32,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ZoomState
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -97,6 +100,10 @@ class CameraEngine(private val context: Context) {
     var hasFlash by mutableStateOf(false)
         private set
     var canSwitch by mutableStateOf(false)
+        private set
+
+    /** True when this phone can run the front and back cameras at the same time (Android 11+). */
+    var dualSupported by mutableStateOf(false)
         private set
     var bound by mutableStateOf(false)
         private set
@@ -191,6 +198,12 @@ class CameraEngine(private val context: Context) {
         error = null
         try {
             val p = provider ?: ProcessCameraProvider.getInstance(context).await(mainExecutor).also { provider = it }
+            val dualPair = frontBackPair(p)
+            dualSupported = dualPair != null
+            if (cfg.mode == CameraMode.DUAL) {
+                bindDual(p, owner, previewView, cfg, dualPair)
+                return
+            }
             val hasBack = runCatching { p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) }.getOrDefault(false)
             val hasFront = runCatching { p.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) }.getOrDefault(false)
             canSwitch = hasBack && hasFront
@@ -294,7 +307,8 @@ class CameraEngine(private val context: Context) {
 
                 CameraMode.TIMELAPSE -> cases.add(buildAnalysis(aspect, Size(1920, 1080), analyzer))
 
-                CameraMode.VIDEO, CameraMode.CLIP -> {
+                // DUAL never reaches here (bindDual handles it); listed so the `when` stays exhaustive.
+                CameraMode.VIDEO, CameraMode.CLIP, CameraMode.DUAL -> {
                     val fhd = cfg.videoRes == VideoResolution.FHD
                     val quality = if (fhd) Quality.FHD else Quality.HD
                     val recorder = Recorder.Builder()
@@ -352,6 +366,84 @@ class CameraEngine(private val context: Context) {
             camera = null
             error = e.message ?: "Camera could not start"
         }
+    }
+
+    /** A back + front camera pair this phone can run at the same time, or null (needs Android 11+). */
+    private fun frontBackPair(p: ProcessCameraProvider): Pair<CameraSelector, CameraSelector>? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return null
+        return runCatching {
+            p.availableConcurrentCameraInfos.firstNotNullOfOrNull { infos ->
+                val back = infos.firstOrNull { it.lensFacing == CameraSelector.LENS_FACING_BACK }
+                val front = infos.firstOrNull { it.lensFacing == CameraSelector.LENS_FACING_FRONT }
+                if (back != null && front != null) back.cameraSelector to front.cameraSelector else null
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Dual video: both cameras feed one preview and one recording. CameraX composites them:
+     * the main camera full frame, the other as a picture-in-picture in the bottom-right corner.
+     * [BindConfig.front] picks which camera is the main one.
+     */
+    private fun bindDual(
+        p: ProcessCameraProvider,
+        owner: LifecycleOwner,
+        previewView: PreviewView,
+        cfg: BindConfig,
+        pair: Pair<CameraSelector, CameraSelector>?
+    ) {
+        if (pair == null) {
+            error = "This phone can't use the front and back cameras at the same time"
+            return
+        }
+        p.unbindAll()
+        zoomLiveData?.removeObserver(zoomObserver)
+        imageCapture = null
+        videoCapture = null
+        photoFrames = null
+        stabilized = false
+        lowLightFps = null
+        scene = Scene.NORMAL
+
+        val aspect = AspectRatioStrategy(AspectRatio.RATIO_16_9, AspectRatioStrategy.FALLBACK_RULE_AUTO)
+        val preview = Preview.Builder()
+            .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(aspect).build())
+            .build()
+        val quality = if (cfg.videoRes == VideoResolution.FHD) Quality.FHD else Quality.HD
+        val recorder = Recorder.Builder()
+            .setQualitySelector(QualitySelector.from(quality, FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)))
+            .build()
+        val video = VideoCapture.withOutput(recorder)
+        val group = UseCaseGroup.Builder().addUseCase(preview).addUseCase(video).build()
+
+        val (back, front) = pair
+        val main = if (cfg.front) front else back
+        val inset = if (cfg.front) back else front
+        val full = CompositionSettings.Builder().setAlpha(1f).setOffset(0f, 0f).setScale(1f, 1f).build()
+        // Normalized device coordinates: a third of the frame, near the bottom-right corner.
+        val corner = CompositionSettings.Builder()
+            .setAlpha(1f)
+            .setOffset(2f / 3f - 0.1f, -2f / 3f + 0.1f)
+            .setScale(1f / 3f, 1f / 3f)
+            .build()
+        val concurrent = p.bindToLifecycle(
+            listOf(
+                ConcurrentCamera.SingleCameraConfig(main, group, full, owner),
+                ConcurrentCamera.SingleCameraConfig(inset, group, corner, owner)
+            )
+        )
+        preview.setSurfaceProvider(previewView.surfaceProvider)
+
+        val cam = concurrent.cameras.first()
+        camera = cam
+        videoCapture = video
+        usingExtension = false
+        hasFlash = cam.cameraInfo.hasFlashUnit()
+        cam.cameraInfo.zoomState.also { zoomLiveData = it }.observe(owner, zoomObserver)
+        proCaps = readCaps(cam, false)
+        videoReady = true
+        photoReady = false
+        bound = true
     }
 
     private fun buildAnalysis(

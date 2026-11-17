@@ -153,12 +153,17 @@ fun PanelLabel(text: String) {
 
 /** Scrollable row of capture modes; the chosen one is a filled pill. */
 @Composable
-fun ModeStrip(selected: CameraMode, enabled: Boolean, onSelect: (CameraMode) -> Unit) {
+fun ModeStrip(
+    selected: CameraMode,
+    enabled: Boolean,
+    modes: List<CameraMode> = CameraMode.entries,
+    onSelect: (CameraMode) -> Unit
+) {
     val scroll = rememberScrollState()
     val density = LocalDensity.current
     LaunchedEffect(selected) {
         // Roughly centre the chosen mode.
-        val target = with(density) { (selected.ordinal * 84 - 110).dp.roundToPx() }
+        val target = with(density) { (modes.indexOf(selected).coerceAtLeast(0) * 84 - 110).dp.roundToPx() }
         scroll.animateScrollTo(target.coerceAtLeast(0))
     }
     Row(
@@ -169,7 +174,7 @@ fun ModeStrip(selected: CameraMode, enabled: Boolean, onSelect: (CameraMode) -> 
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        for (mode in CameraMode.entries) {
+        for (mode in modes) {
             val isSelected = mode == selected
             Text(
                 text = mode.label,
